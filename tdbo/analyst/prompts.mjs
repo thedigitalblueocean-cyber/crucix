@@ -1,189 +1,105 @@
-/**
- * TDBO AI Analyst - Prompt Templates
- *
- * Structured prompt builders for analyst operations.
- * Each function returns a formatted string ready for LLM consumption.
- *
- * TDBO Proprietary - The Digital Blue Ocean
- */
+// tdbo/analyst/prompts.mjs
+// Intelligence Prompt Templates for Crucix AI Analyst
+// Structured to produce 512-gateway-compatible outputs
 
-const SYSTEM_CONTEXT = `You are a TDBO AI Analyst operating within the Crucix governance framework.
-You provide deterministic, evidence-based analysis with full accountability tracking.
-All outputs are subject to CVS 512 validation and witness chain recording.
-Jurisdiction: DIFC. Entity: The Digital Blue Ocean Ltd.`;
+export function buildTradeIdeaPrompt(sweepData) {
+  const sourcesSummary = (sweepData.sources || []).map(s => {
+    const count = Array.isArray(s.events) ? s.events.length : (s.count || 0);
+    return `- ${s.id || s.source_id}: ${count} events`;
+  }).join('\n');
 
-/**
- * Build a trade idea prompt from sweep state data
- */
-export function buildTradeIdeaPrompt(sweepState, options = {}) {
-  const context = summarizeSweepState(sweepState);
-  const timeframe = options.timeframe || '24h';
-  const riskTolerance = options.riskTolerance || 'moderate';
+  const topEvents = extractTopEvents(sweepData, 15);
 
-  return `${SYSTEM_CONTEXT}
+  return `You are a quantitative intelligence analyst operating inside an accountable AI terminal.
+Your outputs will pass through an admissibility gateway that requires:
+- A confidence score between 0.0 and 1.0
+- At least 2 cross-domain source citations
+- Specific, actionable trade ideas grounded in the data below
 
-TASK: Generate a structured trade idea based on the following real-time intelligence sweep.
+CURRENT SWEEP DATA (${new Date().toISOString()}):
 
-SWEEP DATA:
-${context}
+DATA SOURCES ACTIVE:
+${sourcesSummary}
 
-PARAMETERS:
-- Timeframe: ${timeframe}
-- Risk tolerance: ${riskTolerance}
-- Require: entry/exit levels, stop-loss, confidence score (0-100)
+TOP EVENTS THIS SWEEP:
+${topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
 
-OUTPUT FORMAT:
-Return a JSON object with keys: asset, direction, entry, target, stopLoss, confidence, rationale, signals, timestamp.
-Rationale must reference specific sweep signals. Confidence must reflect data quality.`;
+MARKET SNAPSHOT:
+${formatMarketData(sweepData.market || {})}
+
+ACTIVE ALERTS:
+${(sweepData.alerts || []).slice(0, 10).map(a => `- [${a.tier || 'INFO'}] ${a.message || a.text}`).join('\n') || 'None'}
+
+INSTRUCTIONS:
+Generate 3-5 trade ideas. For each idea, provide:
+1. IDEA: One-sentence trade thesis
+2. DIRECTION: LONG / SHORT / HEDGE / MONITOR
+3. CONFIDENCE: 0.0-1.0
+4. SOURCES: List the specific data sources (minimum 2)
+5. TIMEFRAME: Intraday / Swing (1-5d) / Position (1-4w)
+6. RISK: Key risk that would invalidate this thesis
+7. CROSS_DOMAIN: Which different source categories connect
+
+Format as JSON array:
+[{"idea":"...","direction":"LONG|SHORT|HEDGE|MONITOR","confidence":0.0,"sources":["source1","source2"],"timeframe":"intraday|swing|position","risk":"...","cross_domain_categories":["fires","maritime","market"]}]
+
+Return ONLY the JSON array.`;
 }
 
-/**
- * Build a risk assessment prompt
- */
-export function buildRiskAssessmentPrompt(sweepState, portfolio = {}) {
-  const context = summarizeSweepState(sweepState);
-  const holdings = portfolio.holdings
-    ? JSON.stringify(portfolio.holdings).slice(0, 500)
-    : 'No portfolio data provided';
+export function buildAlertEvaluationPrompt(events, existingAlerts) {
+  return `You are an intelligence alert classifier. Evaluate these events:
 
-  return `${SYSTEM_CONTEXT}
+FLASH: Immediate — multiple correlated anomalies, potential crisis
+PRIORITY: Notable — single-domain anomaly, developing situation
+ROUTINE: Standard — expected patterns, normal fluctuations
 
-TASK: Perform a risk assessment based on current intelligence sweep and portfolio state.
+EVENTS:
+${events.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
 
-SWEEP DATA:
-${context}
+EXISTING ALERTS:
+${(existingAlerts || []).slice(0, 5).map(a => `- [${a.tier}] ${a.message}`).join('\n') || 'None'}
 
-PORTFOLIO:
-${holdings}
+Respond with JSON array:
+[{"event_index":1,"tier":"FLASH|PRIORITY|ROUTINE","confidence":0.0,"reasoning":"...","correlated_domains":["cat1","cat2"]}]
 
-ANALYSIS REQUIRED:
-1. Identify top 3 risk factors from sweep data
-2. Assess correlation risk across holdings
-3. Flag any geopolitical or regulatory triggers
-4. Provide risk score (0-100) with breakdown
-
-OUTPUT FORMAT:
-Return a JSON object with keys: riskScore, topRisks (array), correlationWarnings, triggers, mitigations, timestamp.`;
+Return ONLY the JSON array.`;
 }
 
-/**
- * Build a market brief prompt
- */
-export function buildMarketBriefPrompt(sweepState, options = {}) {
-  const context = summarizeSweepState(sweepState);
-  const focus = options.focus || 'general';
-  const length = options.length || 'concise';
+export function buildBriefingPrompt(sweepData) {
+  const topEvents = extractTopEvents(sweepData, 20);
 
-  return `${SYSTEM_CONTEXT}
+  return `You are an intelligence briefing officer. Produce a situation report.
 
-TASK: Generate a market intelligence brief from the latest sweep data.
+SWEEP: ${new Date().toISOString()}
+SOURCES: ${(sweepData.sources || []).length}
+EVENTS: ${(sweepData.sources || []).reduce((s, src) => s + (Array.isArray(src.events) ? src.events.length : 0), 0)}
 
-SWEEP DATA:
-${context}
+KEY EVENTS:
+${topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
 
-PARAMETERS:
-- Focus: ${focus}
-- Length: ${length}
-- Include: key moves, sentiment shifts, notable events
+Format as JSON:
+{"headline":"...","situation":"...","key_signals":[{"signal":"...","source":"...","significance":"HIGH|MEDIUM|LOW"}],"correlations":[{"domains":["a","b"],"description":"..."}],"watch_list":[{"item":"...","reason":"..."}],"confidence":0.0,"sources_cited":["source1","source2"]}
 
-OUTPUT FORMAT:
-Return a JSON object with keys: summary, keyMoves (array), sentiment, notableEvents (array), outlook, timestamp.
-Keep ${length === 'concise' ? 'under 200 words' : 'under 500 words'} for summary.`;
+Return ONLY the JSON.`;
 }
 
-/**
- * Build a geopolitical analysis prompt
- */
-export function buildGeopoliticalPrompt(sweepState, region = 'global') {
-  const context = summarizeSweepState(sweepState);
-
-  return `${SYSTEM_CONTEXT}
-
-TASK: Analyze geopolitical signals from sweep data for market impact assessment.
-
-SWEEP DATA:
-${context}
-
-REGION FOCUS: ${region}
-
-ANALYSIS REQUIRED:
-1. Identify active geopolitical developments
-2. Assess market impact probability and severity
-3. Map affected asset classes and regions
-4. Timeline estimation for impact materialization
-
-OUTPUT FORMAT:
-Return a JSON object with keys: developments (array), impactAssessment, affectedAssets (array), timeline, riskLevel, timestamp.`;
-}
-
-/**
- * Summarize sweep state into a readable context string for prompts
- */
-export function summarizeSweepState(sweepState) {
-  if (!sweepState || typeof sweepState !== 'object') {
-    return 'No sweep data available.';
-  }
-
-  const sections = [];
-
-  if (sweepState.fires) {
-    const count = Array.isArray(sweepState.fires) ? sweepState.fires.length : 0;
-    sections.push(`FIRES: ${count} active alerts`);
-  }
-
-  if (sweepState.flights) {
-    const count = Array.isArray(sweepState.flights) ? sweepState.flights.length : 0;
-    sections.push(`FLIGHT TRACKING: ${count} aircraft tracked (OpenSky)`);
-  }
-
-  if (sweepState.maritime) {
-    const count = Array.isArray(sweepState.maritime) ? sweepState.maritime.length : 0;
-    sections.push(`MARITIME: ${count} vessel movements at choke points`);
-  }
-
-  if (sweepState.radiation) {
-    sections.push(`RADIATION: Monitoring ${JSON.stringify(sweepState.radiation).slice(0, 200)}`);
-  }
-
-  if (sweepState.conflicts) {
-    const count = Array.isArray(sweepState.conflicts) ? sweepState.conflicts.length : 0;
-    sections.push(`CONFLICT ZONES: ${count} events (ACLED)`);
-  }
-
-  if (sweepState.markets) {
-    sections.push(`MARKETS: ${JSON.stringify(sweepState.markets).slice(0, 400)}`);
-  }
-
-  if (sweepState.news) {
-    const count = Array.isArray(sweepState.news) ? sweepState.news.length : 0;
-    sections.push(`NEWS: ${count} hotspot items`);
-  }
-
-  if (sweepState.health) {
-    sections.push(`HEALTH: ${JSON.stringify(sweepState.health).slice(0, 200)}`);
-  }
-
-  if (sweepState.sdr) {
-    sections.push(`SDR SIGNALS: ${JSON.stringify(sweepState.sdr).slice(0, 200)}`);
-  }
-
-  // Include any other keys not yet handled
-  const handled = new Set(['fires', 'flights', 'maritime', 'radiation', 'conflicts', 'markets', 'news', 'health', 'sdr']);
-  for (const [key, value] of Object.entries(sweepState)) {
-    if (!handled.has(key) && value) {
-      sections.push(`${key.toUpperCase()}: ${JSON.stringify(value).slice(0, 200)}`);
+function extractTopEvents(sweepData, limit) {
+  const events = [];
+  for (const source of (sweepData.sources || [])) {
+    for (const event of (source.events || []).slice(0, 5)) {
+      events.push({
+        category: source.id || source.source_id || 'unknown',
+        summary: event.title || event.summary || event.text || event.description ||
+                 JSON.stringify(event).substring(0, 150)
+      });
     }
   }
-
-  return sections.length > 0
-    ? sections.join('\n')
-    : 'Sweep data present but no structured signals extracted.';
+  return events.slice(0, limit);
 }
 
-export default {
-  buildTradeIdeaPrompt,
-  buildRiskAssessmentPrompt,
-  buildMarketBriefPrompt,
-  buildGeopoliticalPrompt,
-  summarizeSweepState
-};
+function formatMarketData(market) {
+  if (!market || Object.keys(market).length === 0) return 'No market data available';
+  return Object.entries(market).map(([k, v]) =>
+    `  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`
+  ).join('\n');
+}
