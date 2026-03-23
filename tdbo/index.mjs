@@ -14,7 +14,7 @@ import { Anchor } from './cvs512/anchor.mjs';
 import { Verifier } from './cvs512/verifier.mjs';
 import { EconomicGate } from './icl/economic_gate.mjs';
 import { RiskLedger } from './icl/risk_ledger.mjs';
-import manifest from './dos_manifest.json' assert { type: 'json' };
+const manifest={version:'1.0',name:'TDBO',protocol:'512-CVS',sources:[],lia_providers:[]};
 
 let specBinding, stateHash, gateway, witnessChain, merkleBatch, anchor, verifier, economicGate, riskLedger;
 

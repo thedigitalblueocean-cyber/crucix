@@ -17,8 +17,8 @@ import { TelegramAlerter } from './lib/alerts/telegram.mjs';
 import { DiscordAlerter } from './lib/alerts/discord.mjs';
 import * as tdbo from './tdbo/index.mjs';
 import * as analyst from './tdbo/analyst/index.mjs';
-import { createEvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
-import { append as appendWitness } from './tdbo/cvs512/witness_chain.mjs';
+import { EvidenceObject as createEvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
+import { WitnessChain as appendWitness } from './tdbo/cvs512/witness_chain.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
