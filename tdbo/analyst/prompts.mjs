@@ -8,36 +8,44 @@ export function buildTradeIdeaPrompt(sweepData) {
     return `- ${s.id || s.source_id}: ${count} events`;
   }).join('\n');
 
-  const topEvents = extractTopEvents(sweepData, 15);
+  // Limit to short, 120-char summaries only
+  const topEvents = extractTopEvents(sweepData, 12).map(e => ({
+    category: e.category,
+    summary: (e.summary || '').substring(0, 120)
+  }));
 
   return `You are a quantitative intelligence analyst operating inside an accountable AI terminal.
 Your outputs will pass through an admissibility gateway that requires:
 - A confidence score between 0.0 and 1.0
 - At least 2 cross-domain source citations
-- Specific, actionable trade ideas grounded in the data below
+- Specific, actionable trade ideas grounded in the data summary below
 
-CURRENT SWEEP DATA (${new Date().toISOString()}):
+CURRENT SWEEP SNAPSHOT (${new Date().toISOString()}):
 
 DATA SOURCES ACTIVE:
 ${sourcesSummary}
 
-TOP EVENTS THIS SWEEP:
+TOP EVENT SUMMARIES (TRUNCATED, DO NOT RESTATE VERBATIM):
 ${topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
 
-MARKET SNAPSHOT:
+MARKET SNAPSHOT (ONLY USE IF RELEVANT):
 ${formatMarketData(sweepData.market || {})}
 
-ACTIVE ALERTS:
-${(sweepData.alerts || []).slice(0, 10).map(a => `- [${a.tier || 'INFO'}] ${a.message || a.text}`).join('\n') || 'None'}
+ACTIVE ALERTS (MAX 5, SUMMARIZED):
+${(sweepData.alerts || []).slice(0, 5).map(a => `- [${a.tier || 'INFO'}] ${(a.message || a.text || '').substring(0, 100)}`).join('\n') || 'None'}
 
 INSTRUCTIONS:
-Generate 3-5 trade ideas. For each idea, provide:
-1. IDEA: One-sentence trade thesis
+- Use the summaries only as signals; do NOT quote long text.
+- Prefer concise, information-dense wording.
+- Generate 3 trade ideas, not more.
+
+For each idea, provide:
+1. IDEA: One-sentence trade thesis (max 35 words)
 2. DIRECTION: LONG / SHORT / HEDGE / MONITOR
 3. CONFIDENCE: 0.0-1.0
 4. SOURCES: List the specific data sources (minimum 2)
 5. TIMEFRAME: Intraday / Swing (1-5d) / Position (1-4w)
-6. RISK: Key risk that would invalidate this thesis
+6. RISK: One key risk that would invalidate this thesis (max 25 words)
 7. CROSS_DOMAIN: Which different source categories connect
 
 Format as JSON array:
