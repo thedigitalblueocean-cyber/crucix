@@ -1,11 +1,13 @@
 /**
- * TDBO AI Analyst - Multi-LLM Provider Router
+ * TDBO AI Analyst — Governed Multi-LLM Provider Router
+ * Copyright (c) 2026 The Digital Blue Ocean Ltd (DIFC)
  *
- * Routes requests to the appropriate LLM provider based on configuration.
- * Supports Anthropic, OpenAI, Gemini, OpenRouter, Codex, and MiniMax.
- * All calls use raw fetch - zero SDK dependencies.
+ * Routes LLM requests with governance-aware tracking.
+ * Every call records provider, model, latency, and token usage.
+ * Supports Anthropic, OpenAI, Gemini, and OpenRouter.
+ * All calls use raw fetch — zero SDK dependencies.
  *
- * TDBO Proprietary - The Digital Blue Ocean
+ * TDBO Proprietary — The Digital Blue Ocean
  */
 
 const PROVIDERS = {
@@ -29,6 +31,12 @@ const PROVIDERS = {
     },
     extractText(response) {
       return response.content?.[0]?.text || '';
+    },
+    extractUsage(response) {
+      return {
+        inputTokens: response.usage?.input_tokens || 0,
+        outputTokens: response.usage?.output_tokens || 0
+      };
     }
   },
 
@@ -51,6 +59,12 @@ const PROVIDERS = {
     },
     extractText(response) {
       return response.choices?.[0]?.message?.content || '';
+    },
+    extractUsage(response) {
+      return {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
+      };
     }
   },
 
@@ -71,6 +85,12 @@ const PROVIDERS = {
     },
     extractText(response) {
       return response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    },
+    extractUsage(response) {
+      return {
+        inputTokens: response.usageMetadata?.promptTokenCount || 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount || 0
+      };
     }
   },
 
@@ -95,70 +115,46 @@ const PROVIDERS = {
     },
     extractText(response) {
       return response.choices?.[0]?.message?.content || '';
-    }
-  },
-
-  codex: {
-    url: 'https://api.openai.com/v1/chat/completions',
-    envKey: 'CODEX_API_KEY',
-    buildRequest(prompt, config) {
-      return {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`
-        },
-        body: JSON.stringify({
-          model: config.model || 'gpt-4o',
-          max_tokens: config.maxTokens || 4096,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      };
     },
-    extractText(response) {
-      return response.choices?.[0]?.message?.content || '';
-    }
-  },
-
-  minimax: {
-    url: 'https://api.minimax.chat/v1/text/chatcompletion_v2',
-    envKey: 'MINIMAX_API_KEY',
-    buildRequest(prompt, config) {
+    extractUsage(response) {
       return {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`
-        },
-        body: JSON.stringify({
-          model: config.model || 'abab6.5s-chat',
-          messages: [{ role: 'user', content: prompt }],
-          tokens_to_generate: config.maxTokens || 4096
-        })
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
       };
-    },
-    extractText(response) {
-      return response.choices?.[0]?.message?.content ||
-             response.reply || '';
     }
   }
 };
 
+/**
+ * Governed analyst provider — tracks every call for audit.
+ */
 export class AnalystProvider {
+  #defaultProvider;
+  #timeout;
+  #retries;
+  #fallbackOrder;
+  #stats;
+  #callLog;
+
   constructor(config = {}) {
-    this.defaultProvider = config.provider || 'anthropic';
-    this.timeout = config.timeout || 30000;
-    this.retries = config.retries || 1;
-    this.fallbackOrder = config.fallbackOrder || [
+    this.#defaultProvider = config.provider || 'anthropic';
+    this.#timeout = config.timeout || 30000;
+    this.#retries = config.retries || 1;
+    this.#fallbackOrder = config.fallbackOrder || [
       'anthropic', 'openai', 'gemini', 'openrouter'
     ];
-    this.stats = { calls: 0, successes: 0, failures: 0, byProvider: {} };
+    this.#stats = { calls: 0, successes: 0, failures: 0, totalInputTokens: 0, totalOutputTokens: 0, byProvider: {} };
+    this.#callLog = [];
   }
 
+  /**
+   * Call an LLM provider with full governance tracking.
+   * Returns { text, provider, model, timestamp, latencyMs, usage }.
+   */
   async call(prompt, options = {}) {
-    const providerName = options.provider || this.defaultProvider;
+    const providerName = options.provider || this.#defaultProvider;
     const providers = options.useFallback
-      ? this.fallbackOrder
+      ? this.#fallbackOrder
       : [providerName];
 
     let lastError = null;
@@ -167,25 +163,23 @@ export class AnalystProvider {
       const provider = PROVIDERS[name];
       if (!provider) continue;
 
-      const apiKey = options.apiKey ||
-        process.env[provider.envKey] || null;
+      const apiKey = options.apiKey || process.env[provider.envKey] || null;
       if (!apiKey) continue;
 
       const config = { ...options, apiKey };
 
-      for (let attempt = 0; attempt <= this.retries; attempt++) {
+      for (let attempt = 0; attempt <= this.#retries; attempt++) {
+        const startTime = Date.now();
         try {
-          this.stats.calls++;
-          this._trackProvider(name);
+          this.#stats.calls++;
+          this.#trackProvider(name, 'call');
 
           const reqConfig = provider.buildRequest(prompt, config);
           const url = reqConfig.url || provider.url;
           delete reqConfig.url;
 
           const controller = new AbortController();
-          const timeoutId = setTimeout(
-            () => controller.abort(), this.timeout
-          );
+          const timeoutId = setTimeout(() => controller.abort(), this.#timeout);
 
           const response = await fetch(url, {
             ...reqConfig,
@@ -195,29 +189,50 @@ export class AnalystProvider {
 
           if (!response.ok) {
             const errBody = await response.text();
-            throw new Error(
-              `${name} HTTP ${response.status}: ${errBody.slice(0, 200)}`
-            );
+            throw new Error(`${name} HTTP ${response.status}: ${errBody.slice(0, 200)}`);
           }
 
           const data = await response.json();
           const text = provider.extractText(data);
-
           if (!text) {
             throw new Error(`${name} returned empty response`);
           }
 
-          this.stats.successes++;
-          return {
+          const usage = provider.extractUsage(data);
+          const latencyMs = Date.now() - startTime;
+
+          this.#stats.successes++;
+          this.#stats.totalInputTokens += usage.inputTokens;
+          this.#stats.totalOutputTokens += usage.outputTokens;
+          this.#trackProvider(name, 'success');
+
+          const result = {
             text,
             provider: name,
             model: config.model || 'default',
             timestamp: Date.now(),
-            latencyMs: Date.now() - (config._startTime || Date.now())
+            latencyMs,
+            usage
           };
+
+          // Audit log (keep last 200 calls)
+          this.#callLog.push({
+            provider: name,
+            model: result.model,
+            latencyMs,
+            usage,
+            timestamp: result.timestamp,
+            promptLength: prompt.length,
+            responseLength: text.length
+          });
+          if (this.#callLog.length > 200) this.#callLog.shift();
+
+          return result;
+
         } catch (err) {
           lastError = err;
-          this.stats.failures++;
+          this.#stats.failures++;
+          this.#trackProvider(name, 'failure');
           console.warn(
             `[TDBO:Analyst:Provider] ${name} attempt ${attempt + 1} failed:`,
             err.message
@@ -231,15 +246,19 @@ export class AnalystProvider {
     );
   }
 
-  _trackProvider(name) {
-    if (!this.stats.byProvider[name]) {
-      this.stats.byProvider[name] = { calls: 0, successes: 0, failures: 0 };
+  #trackProvider(name, event) {
+    if (!this.#stats.byProvider[name]) {
+      this.#stats.byProvider[name] = { calls: 0, successes: 0, failures: 0 };
     }
-    this.stats.byProvider[name].calls++;
+    this.#stats.byProvider[name][event === 'call' ? 'calls' : event === 'success' ? 'successes' : 'failures']++;
   }
 
   getStats() {
-    return { ...this.stats };
+    return { ...this.#stats, callLogSize: this.#callLog.length };
+  }
+
+  getCallLog(limit = 50) {
+    return this.#callLog.slice(-limit);
   }
 
   getAvailableProviders() {
