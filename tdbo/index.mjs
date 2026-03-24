@@ -14,36 +14,62 @@ import { Anchor } from './cvs512/anchor.mjs';
 import { Verifier } from './cvs512/verifier.mjs';
 import { EconomicGate } from './icl/economic_gate.mjs';
 import { RiskLedger } from './icl/risk_ledger.mjs';
-const manifest={version:'1.0',name:'TDBO',protocol:'512-CVS',sources:[],lia_providers:[]};
+
+const manifest = {
+  version: '1.0',
+  name: 'TDBO',
+  protocol: '512-CVS',
+  sources: [],
+  llm_providers: [],   // canonical field name
+  lia_providers: [],   // alias kept for compatibility
+};
 
 let specBinding, stateHash, gateway, witnessChain, merkleBatch, anchor, verifier, economicGate, riskLedger;
 
 export async function init(config = {}) {
-  specBinding = new SpecBinding(config);
-  stateHash = new StateHash();
-  witnessChain = new WitnessChain();
-  merkleBatch = new MerkleBatch();
-  anchor = new Anchor(config.anchorRpc, config.anchorContract);
-  verifier = new Verifier(config.anchorRpc, config.anchorContract);
-  economicGate = new EconomicGate(config.icl);
-  riskLedger = new RiskLedger(config.icl);
-  gateway = new Gateway512({ witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash });
+  specBinding   = new SpecBinding(config);
+  stateHash     = new StateHash();
+  witnessChain  = new WitnessChain();
+  merkleBatch   = new MerkleBatch();
+  anchor        = new Anchor(config.anchorRpc, config.anchorContract);
+  verifier      = new Verifier(config.anchorRpc, config.anchorContract);
+  economicGate  = new EconomicGate(config.icl);
+  riskLedger    = new RiskLedger(config.icl);
+  gateway       = new Gateway512({
+    witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash
+  });
 
   const specHash = specBinding.bind();
+  const srcCount = Array.isArray(manifest.sources)      ? manifest.sources.length      : 0;
+  const llmCount = Array.isArray(manifest.llm_providers) ? manifest.llm_providers.length : 0;
   console.log(`[TDBO] Governance layer initialised — spec_hash: ${specHash}`);
-  console.log(`[TDBO] DOS manifest loaded: ${manifest.sources.length} sources, ${manifest.llm_providers.length} LLM providers`);
+  console.log(`[TDBO] DOS manifest loaded: ${srcCount} sources, ${llmCount} LLM providers`);
   return { specHash };
 }
 
-export async function onSweepComplete(sweepData) {
-  const evidence = EvidenceObject.create(sweepData, 'sweep');
-  witnessChain.append(evidence);
-  stateHash.update(sweepData);
-  if (merkleBatch.shouldFlush()) {
-    const root = merkleBatch.flush();
-    await anchor.submit(root);
+export function onSweepComplete(sweepData) {
+  try {
+    const evidence = EvidenceObject.create(sweepData, 'SWEEP_COMPLETE', {
+      who:  'crucix-sweep-engine',
+      where: 'crucix-runtime',
+    });
+    witnessChain.append(evidence);
+    stateHash.update(sweepData);
+    // Fire-and-forget Merkle anchor — never crash the sweep
+    if (merkleBatch && merkleBatch.shouldFlush()) {
+      Promise.resolve()
+        .then(() => {
+          const root = merkleBatch.flush();
+          return anchor.submit(root);
+        })
+        .catch(err => console.warn('[TDBO] Anchor submit failed (non-fatal):', err.message));
+    }
+    console.log(`[TDBO] Sweep EO id: ${evidence.id}`);
+    return evidence;
+  } catch (err) {
+    console.error('[TDBO] onSweepComplete error (non-fatal):', err.message);
+    return { id: `sweep_fallback_${Date.now()}`, evidence_hash: null };
   }
-  return evidence;
 }
 
 export function gateLlmOutput(output, dispatchFn) {
@@ -51,23 +77,38 @@ export function gateLlmOutput(output, dispatchFn) {
 }
 
 export function onAlertDispatched(alert) {
-  const evidence = EvidenceObject.create(alert, 'dispatch');
-  witnessChain.append(evidence);
-  riskLedger.record(alert);
-  return evidence;
+  try {
+    const evidence = EvidenceObject.create(alert, 'ALERT_DISPATCHED', {
+      who: 'crucix-alert-engine',
+      where: 'crucix-runtime',
+    });
+    witnessChain.append(evidence);
+    riskLedger.record(alert);
+    return evidence;
+  } catch (err) {
+    console.error('[TDBO] onAlertDispatched error (non-fatal):', err.message);
+    return null;
+  }
 }
 
 export function getStatus() {
   return {
-    specHash: specBinding?.hash ?? null,
-    stateHash: stateHash?.current ?? null,
+    specHash:           specBinding?.hash ?? null,
+    stateHash:          stateHash?.current ?? null,
     witnessChainLength: witnessChain?.length ?? 0,
     merkleBatchPending: merkleBatch?.pending ?? 0,
-    lastAnchorTx: anchor?.lastTx ?? null,
+    lastAnchorTx:       anchor?.lastTx ?? null,
     economicGateActive: economicGate?.active ?? false,
-    riskLedgerEntries: riskLedger?.count ?? 0,
-    manifest: { sources: manifest.sources.length, providers: manifest.llm_providers.length }
+    riskLedgerEntries:  riskLedger?.count ?? 0,
+    manifest: {
+      sources:   Array.isArray(manifest.sources)       ? manifest.sources.length       : 0,
+      providers: Array.isArray(manifest.llm_providers) ? manifest.llm_providers.length : 0,
+    }
   };
 }
 
-export { SpecBinding, StateHash, Gateway512, EvidenceObject, WitnessChain, MerkleBatch, Anchor, Verifier, EconomicGate, RiskLedger };
+export {
+  SpecBinding, StateHash, Gateway512,
+  EvidenceObject, WitnessChain, MerkleBatch,
+  Anchor, Verifier, EconomicGate, RiskLedger
+};
