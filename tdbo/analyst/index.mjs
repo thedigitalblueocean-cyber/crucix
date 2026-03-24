@@ -6,7 +6,7 @@ import { AnalystProvider } from './provider.mjs';
 import * as prompts from './prompts.mjs';
 import * as parser from './parser.mjs';
 
-// ── Single governed provider instance ──────────────────────────────────────
+// ── Single governed provider instance ────────────────────────────────────────────
 let _provider = null;
 let _gateLlmOutput = null;
 let _createEvidenceObject = null;
@@ -19,16 +19,15 @@ export function initAnalyst(config = {}, hooks = {}) {
   const llmApiKey   = config.apiKey   || process.env.LLM_API_KEY;
   const llmModel    = config.model    || process.env.LLM_MODEL;
 
-  _gateLlmOutput      = hooks.gateLlmOutput      || null;
+  _gateLlmOutput        = hooks.gateLlmOutput        || null;
   _createEvidenceObject = hooks.createEvidenceObject || null;
-  _appendWitness      = hooks.appendWitness      || null;
+  _appendWitness        = hooks.appendWitness        || null;
 
   if (llmProvider && llmProvider !== 'disabled') {
     _provider = new AnalystProvider({
       provider: llmProvider,
       model:    llmModel,
     });
-    // Stash key so provider.call() can pick it up via process.env fallback
     if (llmApiKey) {
       const envMap = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
                        gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
@@ -58,14 +57,14 @@ function activeProviderName() {
   return _provider.getAvailableProviders()[0] || null;
 }
 
-// ── analyzeSweep ────────────────────────────────────────────────────────────
+// ── analyzeSweep ───────────────────────────────────────────────────────────
 export async function analyzeSweep(sweepData, dispatchFn) {
   _stats.sweeps++;
   const sweepId = sweepData.sweep_id || _stats.sweeps;
   const results = { ideas: [], alerts: [], gated: [] };
 
   // --- STEP 1: Generate Trade Ideas via LLM ---
-  const tradePrompt  = prompts.buildTradeIdeaPrompt(sweepData);
+  const tradePrompt = prompts.buildTradeIdeaPrompt(sweepData);
   console.log('[ANALYST] Calling LLM for trade ideas...');
 
   let ideas = [];
@@ -99,10 +98,10 @@ export async function analyzeSweep(sweepData, dispatchFn) {
 
       if (gateResult.admitted) {
         _stats.admitted++;
-        results.ideas.push({ ...idea, status: 'ADMITTED', eo_id: gateResult.eo.eo_id });
+        results.ideas.push({ ...idea, status: 'ADMITTED', eo_id: gateResult.eo?.id });
       } else {
         _stats.refused++;
-        results.ideas.push({ ...idea, status: 'REFUSED', failures: gateResult.failures, eo_id: gateResult.eo.eo_id });
+        results.ideas.push({ ...idea, status: 'REFUSED', failures: gateResult.failures, eo_id: gateResult.eo?.id });
       }
       results.gated.push(gateResult);
     } else {
@@ -132,11 +131,11 @@ export async function analyzeSweep(sweepData, dispatchFn) {
     for (const cls of classifications) {
       if ((cls.tier === 'FLASH' || cls.tier === 'PRIORITY') && _gateLlmOutput) {
         const alertOutput = {
-          content:        `[${cls.tier}] ${events[cls.event_index]?.summary || 'Alert'}`,
-          confidence:     cls.confidence,
-          sources_cited:  cls.correlated_domains,
-          provider:       activeProviderName() || 'rule_based',
-          sweep_id:       sweepId,
+          content:         `[${cls.tier}] ${events[cls.event_index]?.summary || 'Alert'}`,
+          confidence:      cls.confidence,
+          sources_cited:   cls.correlated_domains,
+          provider:        activeProviderName() || 'rule_based',
+          sweep_id:        sweepId,
           _sweepIdeaCount: 1
         };
         const alertGate = _gateLlmOutput(alertOutput, (approved) => {
@@ -152,33 +151,36 @@ export async function analyzeSweep(sweepData, dispatchFn) {
   }
 
   // --- STEP 4: Analysis Evidence Object ---
+  // EvidenceObject.create(payload, eventType, meta) — three separate args
   if (_createEvidenceObject && _appendWitness) {
-    const eo = _createEvidenceObject({
-      eo_type:    'ANALYSIS_COMPLETE',
-      sweep_id:   sweepId,
-      five_anchors: {
-        who:      activeProviderName() || 'rule_based',
-        where:    'crucix_intelligence_terminal',
-        what:     'sweep_analysis_complete',
-        velocity: 'standard'
-      },
-      payload: {
-        ideas_generated: ideas.length,
-        ideas_admitted:  results.ideas.filter(i => i.status === 'ADMITTED').length,
-        ideas_refused:   results.ideas.filter(i => i.status === 'REFUSED').length,
+    try {
+      const eoPayload = {
+        sweep_id:          sweepId,
+        ideas_generated:   ideas.length,
+        ideas_admitted:    results.ideas.filter(i => i.status === 'ADMITTED').length,
+        ideas_refused:     results.ideas.filter(i => i.status === 'REFUSED').length,
         alerts_classified: results.alerts.length,
-        flash_count:     results.alerts.filter(a => a.tier === 'FLASH').length,
-        provider:        activeProviderName() || 'rule_based'
-      }
-    });
-    _appendWitness(eo);
+        flash_count:       results.alerts.filter(a => a.tier === 'FLASH').length,
+        provider:          activeProviderName() || 'rule_based'
+      };
+      const eoMeta = {
+        who:          activeProviderName() || 'rule_based',
+        where:        'crucix_intelligence_terminal',
+        observed_by:  'tdbo-governance-layer'
+      };
+      const eo = _createEvidenceObject(eoPayload, 'ANALYSIS_COMPLETE', eoMeta);
+      _appendWitness(eo);
+      console.log(`[ANALYST] Analysis EO created: ${eo.id}`);
+    } catch (eoErr) {
+      console.error('[ANALYST] EvidenceObject creation failed (non-fatal):', eoErr.message);
+    }
   }
 
   console.log(`[ANALYST] Sweep ${sweepId} complete — admitted: ${_stats.admitted}, refused: ${_stats.refused}`);
   return results;
 }
 
-// ── generateBriefing ────────────────────────────────────────────────────────
+// ── generateBriefing ──────────────────────────────────────────────────────
 export async function generateBriefing(sweepData, sweepId) {
   if (!_provider) {
     return { error: 'No LLM provider configured', fallback: true };
@@ -196,36 +198,36 @@ export async function generateBriefing(sweepData, sweepId) {
 
   if (_gateLlmOutput) {
     const gateResult = _gateLlmOutput({
-      content:        briefing.content,
-      confidence:     briefing.confidence,
-      sources_cited:  briefing.sources_cited,
-      provider:       briefing.provider,
-      sweep_id:       sweepId,
+      content:         briefing.content,
+      confidence:      briefing.confidence,
+      sources_cited:   briefing.sources_cited,
+      provider:        briefing.provider,
+      sweep_id:        sweepId,
       _sweepIdeaCount: 1
-    });
-    return { ...briefing, admitted: gateResult.admitted, eo_id: gateResult.eo.eo_id, failures: gateResult.failures };
+    }, (approved) => {});
+    return { ...briefing, admitted: gateResult.admitted, eo_id: gateResult.eo?.id, failures: gateResult.failures };
   }
 
   return { ...briefing, admitted: true, eo_id: null };
 }
 
-// ── getAnalystStats ─────────────────────────────────────────────────────────
+// ── getAnalystStats ──────────────────────────────────────────────────────────
 export function getAnalystStats() {
   const providerStats = _provider ? _provider.getStats() : {};
   return {
-    sweep_analyses:   _stats.sweeps,
-    total_generated:  _stats.generated,
-    total_admitted:   _stats.admitted,
-    total_refused:    _stats.refused,
-    admission_rate:   _stats.generated > 0
+    sweep_analyses:  _stats.sweeps,
+    total_generated: _stats.generated,
+    total_admitted:  _stats.admitted,
+    total_refused:   _stats.refused,
+    admission_rate:  _stats.generated > 0
       ? ((_stats.admitted / _stats.generated) * 100).toFixed(1) + '%'
       : 'N/A',
-    active_provider:  activeProviderName() || 'none',
-    provider_stats:   providerStats
+    active_provider: activeProviderName() || 'none',
+    provider_stats:  providerStats
   };
 }
 
-// ── extractEvents (internal) ────────────────────────────────────────────────
+// ── extractEvents (internal) ──────────────────────────────────────────────────
 function extractEvents(sweepData) {
   const events = [];
   for (const source of (sweepData.sources || [])) {
