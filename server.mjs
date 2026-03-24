@@ -17,8 +17,14 @@ import { TelegramAlerter } from './lib/alerts/telegram.mjs';
 import { DiscordAlerter } from './lib/alerts/discord.mjs';
 import * as tdbo from './tdbo/index.mjs';
 import * as analyst from './tdbo/analyst/index.mjs';
-import { EvidenceObject as createEvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
-import { WitnessChain as appendWitness } from './tdbo/cvs512/witness_chain.mjs';
+import { EvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
+import { WitnessChain } from './tdbo/cvs512/witness_chain.mjs';
+
+// ── TDBO hook wrappers (classes must be called via static methods / instances) ──
+const _witnessChainInstance = new WitnessChain();
+const createEvidenceObjectHook = (payload, eventType, meta) =>
+  EvidenceObject.create(payload, eventType, meta);
+const appendWitnessHook = (eo) => _witnessChainInstance.append(eo);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -259,6 +265,7 @@ function broadcast(data) {
     try { client.write(msg); } catch { sseClients.delete(client); }
   }
 }
+
 async function runSweepCycle() {
   if (sweepInProgress) {
     console.log('[Crucix] Sweep already in progress, skipping');
@@ -282,7 +289,10 @@ async function runSweepCycle() {
 
     // 3b. TDBO 512/CVS: export sweep state + run governed analyst
     const sweepData = {
-      sources: (rawData.sources || []).map(src => ({
+      sources: (Array.isArray(rawData.sources)
+        ? rawData.sources
+        : Object.values(rawData.sources || {})
+      ).map(src => ({
         id: src.id || src.source_id,
         source_id: src.source_id || src.id,
         events: Array.isArray(src.events) ? src.events : [],
@@ -291,8 +301,13 @@ async function runSweepCycle() {
       market: rawData.market || {},
       alerts: rawData.alerts || [],
     };
-    const hashExport = tdbo.onSweepComplete(sweepData);
-    sweepData.sweep_id = hashExport.sweep_id;
+
+    // onSweepComplete returns an EvidenceObject (frozen); extract id as sweep_id
+    const sweepEvidence = await Promise.resolve(tdbo.onSweepComplete(sweepData));
+    sweepData.sweep_id = sweepEvidence?.id || `sweep_${Date.now()}`;
+    const sweepStateHash = sweepEvidence?.evidence_hash || null;
+    console.log(`[TDBO] Sweep EO id: ${sweepData.sweep_id}`);
+
     const analysisResults = await analyst.analyzeSweep(sweepData, (output) => {
       if (output.type === 'trade_idea') {
         const idea = output.data;
@@ -327,18 +342,20 @@ async function runSweepCycle() {
         // Future: map governed alerts into existing Telegram/Discord pipelines
       }
     });
+
     synthesized.tdbo = {
       sweepId: sweepData.sweep_id,
-      stateHash: hashExport.state_hash,
-      ideasGenerated: analysisResults.ideas.length,
-      ideasAdmitted: analysisResults.ideas.filter(i => i.status === 'ADMITTED').length,
-      ideasRefused: analysisResults.ideas.filter(i => i.status === 'REFUSED').length,
+      stateHash: sweepStateHash,
+      ideasGenerated: analysisResults?.ideas?.length || 0,
+      ideasAdmitted: analysisResults?.ideas?.filter(i => i.status === 'ADMITTED').length || 0,
+      ideasRefused: analysisResults?.ideas?.filter(i => i.status === 'REFUSED').length || 0,
     };
 
     // 4. Delta computation + memory
     const delta = memory.addRun(synthesized);
     synthesized.delta = delta;
-    // 5. LLM-powered trade ideas (LLM-only feature)
+
+    // 5. LLM-powered trade ideas (original Crucix LLM path — runs in parallel to TDBO analyst)
     if (llmProvider?.isConfigured) {
       try {
         console.log('[Crucix] Generating LLM trade ideas...');
@@ -361,6 +378,7 @@ async function runSweepCycle() {
       synthesized.ideas = synthesized.ideas || [];
       synthesized.ideasSource = 'disabled';
     }
+
     // 6. Alert evaluation
     if (delta?.summary?.totalChanges > 0) {
       if (telegramAlerter.isConfigured) {
@@ -388,22 +406,23 @@ async function runSweepCycle() {
     sweepInProgress = false;
   }
 }
+
 async function start() {
   const port = config.port;
 
   // === TDBO 512/CVS + Analyst Init ===
-  tdbo.init({ anchorInterval: 4 });
+  await tdbo.init({ anchorInterval: 4 });
 
   analyst.initAnalyst(
     {
-      provider: process.env.LLM_PROVIDER || config.llm.provider || process.env.LLM_PROVIDER,
-      apiKey: process.env.LLM_API_KEY || config.llm.apiKey || process.env.LLM_API_KEY,
-      model: process.env.LLM_MODEL || config.llm.model || process.env.LLM_MODEL,
+      provider: process.env.LLM_PROVIDER || config.llm?.provider,
+      apiKey:   process.env.LLM_API_KEY   || config.llm?.apiKey,
+      model:    process.env.LLM_MODEL     || config.llm?.model,
     },
     {
-      gateLlmOutput: tdbo.gateLlmOutput,
-      createEvidenceObject,
-      appendWitness,
+      gateLlmOutput:        tdbo.gateLlmOutput,
+      createEvidenceObject: createEvidenceObjectHook,
+      appendWitness:        appendWitnessHook,
     }
   );
 
