@@ -219,6 +219,14 @@
 
   function boot() {
     mountPanel();
+fetch('/api/data').then(r=>r.json()).then(d=>{
+  const ideas = d?.tdbo?.ideas || [];
+  const el = document.getElementById('tdbo-signals-empty');
+  if(el && ideas.length){
+    el.innerHTML = ideas.map(i=>'<div style="color:#0ff;padding:4px 0;font-size:11px">'+i.title+'</div>').join('');
+  }
+}).catch(()=>{});
+
     fetch('/api/tdbo/signals')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -236,3 +244,12 @@
     boot();
   }
 })();
+
+// Session 3.5 patch: prefetch historical on load
+fetch('/api/data').then(r=>r.json()).then(d=>{
+  const ideas = d?.tdbo?.ideas || [];
+  const el = document.getElementById('tdbo-signals-empty');
+  if(el && ideas.length) {
+    el.innerHTML = ideas.map(i=>`<div class="signal-row"><span class="eo-id">${i.eoId||''}</span> ${i.title||''}</div>`).join('');
+  }
+}).catch(()=>{});
