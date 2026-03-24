@@ -19,8 +19,9 @@ import * as tdbo from './tdbo/index.mjs';
 import * as analyst from './tdbo/analyst/index.mjs';
 import { EvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
 import { WitnessChain } from './tdbo/cvs512/witness_chain.mjs';
+import * as admittedSignals from './tdbo/admitted_signals.mjs';
 
-// ── TDBO hook wrappers (classes must be called via static methods / instances) ──
+// ── TDBO hook wrappers ────────────────────────────────────────────────────
 const _witnessChainInstance = new WitnessChain();
 const createEvidenceObjectHook = (payload, eventType, meta) =>
   EvidenceObject.create(payload, eventType, meta);
@@ -78,7 +79,7 @@ if (telegramAlerter.isConfigured) {
   telegramAlerter.onCommand('/sweep', async () => {
     if (sweepInProgress) return '\ud83d\udd04 Sweep already in progress. Please wait.';
     runSweepCycle().catch(err => console.error('[Crucix] Manual sweep failed:', err.message));
-    return '\ud83d\ude80 Manual sweep triggered. You\'ll receive alerts if anything significant is detected.';
+    return '\ud83d\ude80 Manual sweep triggered.';
   });
   telegramAlerter.onCommand('/brief', async () => {
     if (!currentData) return '\u23f3 No data yet \u2014 waiting for first sweep to complete.';
@@ -119,7 +120,7 @@ if (telegramAlerter.isConfigured) {
     return sections.join('\n');
   });
   telegramAlerter.onCommand('/portfolio', async () => {
-    return '\ud83d\udcca Portfolio integration requires Alpaca MCP connection.\nUse the Crucix dashboard or Claude agent for portfolio queries.';
+    return '\ud83d\udcca Portfolio integration requires Alpaca MCP connection.';
   });
   telegramAlerter.startPolling(config.telegram.botPollingInterval);
 }
@@ -145,16 +146,15 @@ if (discordAlerter.isConfigured) {
       `Sources: ${sourcesOk}/${sourcesTotal} OK${sourcesFailed > 0 ? ` (${sourcesFailed} failed)` : ''}`,
       `LLM: ${llmStatus}`,
       `SSE clients: ${sseClients.size}`,
-      `Dashboard: http://localhost:${config.port}`,
     ].join('\n');
   });
   discordAlerter.onCommand('sweep', async () => {
     if (sweepInProgress) return '\ud83d\udd04 Sweep already in progress. Please wait.';
     runSweepCycle().catch(err => console.error('[Crucix] Manual sweep failed:', err.message));
-    return '\ud83d\ude80 Manual sweep triggered. You\'ll receive alerts if anything significant is detected.';
+    return '\ud83d\ude80 Manual sweep triggered.';
   });
   discordAlerter.onCommand('brief', async () => {
-    if (!currentData) return '\u23f3 No data yet \u2014 waiting for first sweep to complete.';
+    if (!currentData) return '\u23f3 No data yet.';
     const tg = currentData.tg || {};
     const energy = currentData.energy || {};
     const delta = memory.getLastDelta();
@@ -169,14 +169,6 @@ if (discordAlerter.isConfigured) {
     if (vix || energy.wti) {
       sections.push(`\ud83d\udcca VIX: ${vix?.value || '--'} | WTI: $${energy.wti || '--'} | Brent: $${energy.brent || '--'}`);
       if (hy) sections.push(`  HY Spread: ${hy.value} | NatGas: $${energy.natgas || '--'}`);
-      sections.push('');
-    }
-    if (tg.urgent?.length > 0) {
-      sections.push(`\ud83d\udce1 OSINT: ${tg.urgent.length} urgent signals, ${tg.posts || 0} total posts`);
-      for (const p of tg.urgent.slice(0, 2)) {
-        sections.push(`  \u2022 ${(p.text || '').substring(0, 80)}`);
-      }
-      sections.push('');
     }
     if (ideas.length > 0) {
       sections.push(`**\ud83d\udca1 Top Ideas:**`);
@@ -187,12 +179,13 @@ if (discordAlerter.isConfigured) {
     return sections.join('\n');
   });
   discordAlerter.onCommand('portfolio', async () => {
-    return '\ud83d\udcca Portfolio integration requires Alpaca MCP connection.\nUse the Crucix dashboard or Claude agent for portfolio queries.';
+    return '\ud83d\udcca Portfolio integration requires Alpaca MCP connection.';
   });
   discordAlerter.start().catch(err => {
     console.error('[Crucix] Discord bot startup failed (non-fatal):', err.message);
   });
 }
+
 const app = express();
 app.use(express.static(join(ROOT, 'dashboard/public')));
 
@@ -204,13 +197,15 @@ app.get('/', (req, res) => {
     let html = readFileSync(htmlPath, 'utf-8');
     const locale = getLocale();
     const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};<\/script>`;
-    html = html.replace('</head>', `${localeScript}\n</head>`);
+    // Inject governed signals panel script
+    const signalsScript = `<script src="/signals.js"><\/script>`;
+    html = html.replace('</head>', `${localeScript}\n${signalsScript}\n</head>`);
     res.type('html').send(html);
   }
 });
 
 app.get('/api/data', (req, res) => {
-  if (!currentData) return res.status(503).json({ error: 'No data yet \u2014 first sweep in progress' });
+  if (!currentData) return res.status(503).json({ error: 'No data yet' });
   res.json(currentData);
 });
 
@@ -240,11 +235,17 @@ app.get('/api/tdbo/status', (req, res) => {
   res.json({ ...baseStatus, analyst: analystStatus });
 });
 
-app.get('/api/locales', (req, res) => {
+// ── NEW: Governed signals history endpoint ──────────────────────────────────────
+app.get('/api/tdbo/signals', (req, res) => {
+  const n = Math.min(parseInt(req.query.limit || '50', 10), 50);
   res.json({
-    current: currentLanguage,
-    supported: getSupportedLocales(),
+    signals: admittedSignals.getSignals(n),
+    stats:   admittedSignals.getStats(),
   });
+});
+
+app.get('/api/locales', (req, res) => {
+  res.json({ current: currentLanguage, supported: getSupportedLocales() });
 });
 
 app.get('/events', (req, res) => {
@@ -274,20 +275,17 @@ async function runSweepCycle() {
   sweepInProgress = true;
   sweepStartedAt = new Date().toISOString();
   broadcast({ type: 'sweep_start', timestamp: sweepStartedAt });
+  admittedSignals.recordSweep();
   console.log(`\n${'='.repeat(60)}`);
   console.log(`[Crucix] Starting sweep at ${new Date().toLocaleTimeString()}`);
   console.log(`${'='.repeat(60)}`);
   try {
-    // 1. Run the full briefing sweep
     const rawData = await fullBriefing();
-    // 2. Save to runs/latest.json
     writeFileSync(join(RUNS_DIR, 'latest.json'), JSON.stringify(rawData, null, 2));
     lastSweepTime = new Date().toISOString();
-    // 3. Synthesize into dashboard format
     console.log('[Crucix] Synthesizing dashboard data...');
     const synthesized = await synthesize(rawData);
 
-    // 3b. TDBO 512/CVS: export sweep state + run governed analyst
     const sweepData = {
       sources: (Array.isArray(rawData.sources)
         ? rawData.sources
@@ -302,7 +300,6 @@ async function runSweepCycle() {
       alerts: rawData.alerts || [],
     };
 
-    // onSweepComplete returns an EvidenceObject (frozen); extract id as sweep_id
     const sweepEvidence = await Promise.resolve(tdbo.onSweepComplete(sweepData));
     sweepData.sweep_id = sweepEvidence?.id || `sweep_${Date.now()}`;
     const sweepStateHash = sweepEvidence?.evidence_hash || null;
@@ -311,15 +308,22 @@ async function runSweepCycle() {
     const analysisResults = await analyst.analyzeSweep(sweepData, (output) => {
       if (output.type === 'trade_idea') {
         const idea = output.data;
+        // Record in ring buffer for /api/tdbo/signals
+        admittedSignals.recordAdmitted(idea, { evidenceId: idea.eo_id });
+        // Add to synthesized ideas for dashboard
         if (!synthesized.ideas) synthesized.ideas = [];
         synthesized.ideas.push({
-          title: idea.content,
-          type: (idea.direction || 'monitor').toLowerCase(),
-          source: 'tdbo-analyst',
-          eoId: idea.eo_id,
+          title:      idea.content,
+          type:       (idea.direction || 'monitor').toLowerCase(),
+          source:     'tdbo-analyst',
+          eoId:       idea.eo_id,
           confidence: idea.confidence,
-          timeframe: idea.timeframe,
+          timeframe:  idea.timeframe,
+          risk:       idea.risk,
+          _ts:        Date.now(),
         });
+        // Broadcast live signal over SSE
+        broadcast({ type: 'trade_idea', data: { ...idea, _ts: Date.now() }, sweep_id: sweepData.sweep_id });
         if (telegramAlerter.isConfigured) {
           telegramAlerter.sendManualAlert(
             `\ud83d\udca1 TRADE IDEA (${idea.direction || 'MONITOR'})\n` +
@@ -339,23 +343,26 @@ async function runSweepCycle() {
           ).catch(() => {});
         }
       } else if (output.type === 'alert') {
-        // Future: map governed alerts into existing Telegram/Discord pipelines
+        broadcast({ type: 'alert', tier: output.tier, data: output.data, sweep_id: sweepData.sweep_id });
       }
     });
 
+    // Tally refused from analysis results
+    const refused = analysisResults?.ideas?.filter(i => i.status === 'REFUSED').length || 0;
+    for (let i = 0; i < refused; i++) admittedSignals.recordRefused();
+
+    const tdboStatus = tdbo.getStatus ? tdbo.getStatus() : {};
     synthesized.tdbo = {
-      sweepId: sweepData.sweep_id,
-      stateHash: sweepStateHash,
-      ideasGenerated: analysisResults?.ideas?.length || 0,
+      sweepId:      sweepData.sweep_id,
+      stateHash:    sweepStateHash,
       ideasAdmitted: analysisResults?.ideas?.filter(i => i.status === 'ADMITTED').length || 0,
-      ideasRefused: analysisResults?.ideas?.filter(i => i.status === 'REFUSED').length || 0,
+      ideasRefused:  refused,
+      lastAnchorTx:  tdboStatus.lastAnchorTx || null,
     };
 
-    // 4. Delta computation + memory
     const delta = memory.addRun(synthesized);
     synthesized.delta = delta;
 
-    // 5. LLM-powered trade ideas (original Crucix LLM path — runs in parallel to TDBO analyst)
     if (llmProvider?.isConfigured) {
       try {
         console.log('[Crucix] Generating LLM trade ideas...');
@@ -379,7 +386,6 @@ async function runSweepCycle() {
       synthesized.ideasSource = 'disabled';
     }
 
-    // 6. Alert evaluation
     if (delta?.summary?.totalChanges > 0) {
       if (telegramAlerter.isConfigured) {
         telegramAlerter.evaluateAndAlert(llmProvider, delta, memory).catch(err => {
@@ -413,6 +419,19 @@ async function start() {
   // === TDBO 512/CVS + Analyst Init ===
   await tdbo.init({ anchorInterval: 4 });
 
+  // Wire Ethereum anchor signer if private key provided
+  const anchorKey = process.env.ANCHOR_PRIVATE_KEY;
+  if (anchorKey && tdbo.getAnchor) {
+    try {
+      await tdbo.getAnchor().connectSigner(anchorKey);
+      console.log('[TDBO] Ethereum anchor signer connected — Merkle roots will anchor to Sepolia');
+    } catch (err) {
+      console.warn('[TDBO] Anchor signer connect failed (non-fatal):', err.message);
+    }
+  } else {
+    console.log('[TDBO] No ANCHOR_PRIVATE_KEY — anchor running in dry-run mode');
+  }
+
   analyst.initAnalyst(
     {
       provider: process.env.LLM_PROVIDER || config.llm?.provider,
@@ -433,10 +452,10 @@ async function start() {
   \u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563
   \u2551 Dashboard: http://localhost:${port}${' '.repeat(14 - String(port).length)}\u2551
   \u2551 Health:    http://localhost:${port}/api/health${' '.repeat(4 - String(port).length)}\u2551
+  \u2551 Signals:   http://localhost:${port}/api/tdbo/signals${' '.repeat(-2 - String(port).length < 0 ? 0 : -2 - String(port).length)}\u2551
   \u2551 Refresh:   Every ${config.refreshIntervalMinutes} min${' '.repeat(20 - String(config.refreshIntervalMinutes).length)}\u2551
   \u2551 LLM:       ${(config.llm.provider || 'disabled').padEnd(31)}\u2551
-  \u2551 Telegram:  ${config.telegram.botToken ? 'enabled' : 'disabled'}${' '.repeat(config.telegram.botToken ? 24 : 23)}\u2551
-  \u2551 Discord:   ${config.discord?.botToken ? 'enabled' : config.discord?.webhookUrl ? 'webhook only' : 'disabled'}${' '.repeat(config.discord?.botToken ? 24 : config.discord?.webhookUrl ? 20 : 23)}\u2551
+  \u2551 Anchor:    ${anchorKey ? 'Sepolia (live)' : 'dry-run'}${' '.repeat(anchorKey ? 17 : 23)}\u2551
   \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
   `);
 
@@ -444,10 +463,7 @@ async function start() {
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n[Crucix] FATAL: Port ${port} is already in use!`);
-      console.error(`[Crucix] A previous Crucix instance may still be running.`);
-      console.error(`[Crucix] Fix: taskkill /F /IM node.exe (Windows)`);
       console.error(`[Crucix] kill $(lsof -ti:${port}) (macOS/Linux)`);
-      console.error(`[Crucix] Or change PORT in .env\n`);
     } else {
       console.error(`[Crucix] Server error:`, err.stack || err.message);
     }
