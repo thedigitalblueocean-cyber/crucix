@@ -5,18 +5,25 @@ import { createHash } from 'crypto';
 
 export function parseTradeIdeas(llmResponse, sweepId, provider) {
   const raw = llmResponse.text || '';
+
+  if (!raw.trim()) {
+    console.warn('[PARSER] Empty LLM response — emitting 1 fallback MONITOR idea');
+    return [_monitorFallback(sweepId, provider, 'Empty LLM response')];
+  }
+
   const ideas = extractJSON(raw);
 
+  // Guard: GPT returned valid JSON but empty array []
+  if (Array.isArray(ideas) && ideas.length === 0) {
+    console.warn('[PARSER] GPT returned empty array [] — emitting 1 fallback MONITOR idea');
+    console.warn('[PARSER] Raw snippet:', raw.slice(0, 300));
+    return [_monitorFallback(sweepId, provider, 'LLM returned empty array')];
+  }
+
   if (!Array.isArray(ideas)) {
-    return [{
-      content: raw,
-      confidence: 0.3,
-      sources_cited: [],
-      provider,
-      sweep_id: sweepId,
-      parse_error: 'Failed to parse as JSON array',
-      _sweepIdeaCount: 1
-    }];
+    console.warn('[PARSER] Could not extract JSON array — emitting 1 fallback MONITOR idea');
+    console.warn('[PARSER] Raw snippet:', raw.slice(0, 300));
+    return [_monitorFallback(sweepId, provider, 'Failed to parse as JSON array')];
   }
 
   return ideas.map((idea, index) => ({
@@ -38,7 +45,7 @@ export function parseTradeIdeas(llmResponse, sweepId, provider) {
 export function parseAlertClassifications(llmResponse) {
   const raw = llmResponse.text || '';
   const classifications = extractJSON(raw);
-  if (!Array.isArray(classifications)) return [];
+  if (!Array.isArray(classifications) || classifications.length === 0) return [];
 
   return classifications.map(c => ({
     event_index: c.event_index,
@@ -105,15 +112,40 @@ export function ruleBasedAlertClassification(events) {
   });
 }
 
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
 function extractJSON(text) {
+  // 1. Direct parse
   try { return JSON.parse(text); } catch {}
+  // 2. Strip markdown fences ```json ... ``` or ``` ... ```
   const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (codeBlock) { try { return JSON.parse(codeBlock[1].trim()); } catch {} }
-  const arr = text.match(/(\[[\s\S]*\])/);
-  if (arr) { try { return JSON.parse(arr[1]); } catch {} }
-  const obj = text.match(/(\{[\s\S]*\})/);
-  if (obj) { try { return JSON.parse(obj[1]); } catch {} }
+  // 3. Find first [...] array
+  const arrMatch = text.match(/(\[[\s\S]*\])/);
+  if (arrMatch) { try { return JSON.parse(arrMatch[1]); } catch {} }
+  // 4. Find first {...} object
+  const objMatch = text.match(/(\{[\s\S]*\})/);
+  if (objMatch) { try { return JSON.parse(objMatch[1]); } catch {} }
   return null;
+}
+
+function _monitorFallback(sweepId, provider, reason) {
+  return {
+    content: `Signal-sparse sweep — no high-confidence trade ideas available. Reason: ${reason}`,
+    confidence: 0.2,
+    sources_cited: ['sweep-metadata'],
+    direction: 'MONITOR',
+    timeframe: 'unknown',
+    risk: 'Insufficient cross-domain signal to form a thesis',
+    cross_domain_categories: [],
+    provider: provider || 'unknown',
+    sweep_id: sweepId,
+    idea_index: 0,
+    _sweepIdeaCount: 1,
+    parse_fallback: true,
+    fallback_reason: reason,
+    content_hash: createHash('sha256').update(reason + sweepId).digest('hex')
+  };
 }
 
 function clampConfidence(val) {

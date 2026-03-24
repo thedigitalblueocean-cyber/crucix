@@ -14,6 +14,14 @@ export function buildTradeIdeaPrompt(sweepData) {
     summary: (e.summary || '').substring(0, 120)
   }));
 
+  // If no events are parseable, inject a sparse-signal notice so GPT
+  // still returns 3 MONITOR ideas rather than an empty array.
+  const eventBlock = topEvents.length > 0
+    ? topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')
+    : '[SIGNAL SPARSE — no individual event text available this sweep. '
+    + 'Use the source activity counts above as your only signals. '
+    + 'You MUST still produce exactly 3 MONITOR ideas with confidence ≤ 0.4.]';
+
   return `You are a quantitative intelligence analyst operating inside an accountable AI terminal.
 Your outputs will pass through an admissibility gateway that requires:
 - A confidence score between 0.0 and 1.0
@@ -26,7 +34,7 @@ DATA SOURCES ACTIVE:
 ${sourcesSummary}
 
 TOP EVENT SUMMARIES (TRUNCATED, DO NOT RESTATE VERBATIM):
-${topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
+${eventBlock}
 
 MARKET SNAPSHOT (ONLY USE IF RELEVANT):
 ${formatMarketData(sweepData.market || {})}
@@ -34,10 +42,11 @@ ${formatMarketData(sweepData.market || {})}
 ACTIVE ALERTS (MAX 5, SUMMARIZED):
 ${(sweepData.alerts || []).slice(0, 5).map(a => `- [${a.tier || 'INFO'}] ${(a.message || a.text || '').substring(0, 100)}`).join('\n') || 'None'}
 
-INSTRUCTIONS:
-- Use the summaries only as signals; do NOT quote long text.
-- Prefer concise, information-dense wording.
-- Generate 3 trade ideas, not more.
+CRITICAL INSTRUCTION — YOU MUST RETURN EXACTLY 3 IDEAS:
+- NEVER return an empty array [].
+- If signals are weak, return 3 MONITOR ideas with confidence ≤ 0.4.
+- If signals are strong, return 3 actionable LONG/SHORT/HEDGE ideas.
+- No preamble, no explanation, no markdown fences — raw JSON array only.
 
 For each idea, provide:
 1. IDEA: One-sentence trade thesis (max 35 words)
@@ -51,7 +60,7 @@ For each idea, provide:
 Format as JSON array:
 [{"idea":"...","direction":"LONG|SHORT|HEDGE|MONITOR","confidence":0.0,"sources":["source1","source2"],"timeframe":"intraday|swing|position","risk":"...","cross_domain_categories":["fires","maritime","market"]}]
 
-Return ONLY the JSON array.`;
+Return ONLY the JSON array. No markdown. No explanation. Start your response with [ and end with ]`;
 }
 
 export function buildAlertEvaluationPrompt(events, existingAlerts) {
@@ -70,7 +79,7 @@ ${(existingAlerts || []).slice(0, 5).map(a => `- [${a.tier}] ${a.message}`).join
 Respond with JSON array:
 [{"event_index":1,"tier":"FLASH|PRIORITY|ROUTINE","confidence":0.0,"reasoning":"...","correlated_domains":["cat1","cat2"]}]
 
-Return ONLY the JSON array.`;
+Return ONLY the JSON array. No markdown. No explanation.`;
 }
 
 export function buildBriefingPrompt(sweepData) {
@@ -83,12 +92,15 @@ SOURCES: ${(sweepData.sources || []).length}
 EVENTS: ${(sweepData.sources || []).reduce((s, src) => s + (Array.isArray(src.events) ? src.events.length : 0), 0)}
 
 KEY EVENTS:
-${topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')}
+${topEvents.length > 0
+  ? topEvents.map((e, i) => `${i+1}. [${e.category}] ${e.summary}`).join('\n')
+  : '[No individual event text available — base briefing on source counts only]'
+}
 
 Format as JSON:
 {"headline":"...","situation":"...","key_signals":[{"signal":"...","source":"...","significance":"HIGH|MEDIUM|LOW"}],"correlations":[{"domains":["a","b"],"description":"..."}],"watch_list":[{"item":"...","reason":"..."}],"confidence":0.0,"sources_cited":["source1","source2"]}
 
-Return ONLY the JSON.`;
+Return ONLY the JSON. No markdown. No explanation.`;
 }
 
 function extractTopEvents(sweepData, limit) {
