@@ -368,10 +368,27 @@ async function runSweepCycle() {
         console.log('[Crucix] Generating LLM trade ideas...');
         const previousIdeas = memory.getLastRun()?.ideas || [];
         const llmIdeas = await generateLLMIdeas(llmProvider, synthesized, delta, previousIdeas);
-        if (llmIdeas) {
+        if (llmIdeas && llmIdeas.length > 0) {
           synthesized.ideas = llmIdeas;
           synthesized.ideasSource = 'llm';
           console.log(`[Crucix] LLM generated ${llmIdeas.length} ideas`);
+          // ── Push LLM ideas into the governed signals ring buffer ──
+          for (const idea of llmIdeas) {
+            admittedSignals.recordAdmitted(
+              {
+                content:    idea.title || idea.content || '',
+                title:      idea.title || idea.content || '',
+                direction:  idea.type || 'monitor',
+                type:       idea.type || 'monitor',
+                confidence: idea.confidence || 0,
+                timeframe:  idea.timeframe || null,
+                risk:       idea.risk || null,
+                sources_cited: idea.sources || [],
+              },
+              { source: 'llm' }
+            );
+          }
+          console.log(`[Crucix] ${llmIdeas.length} LLM ideas added to governed signals ring buffer`);
         } else {
           synthesized.ideas = synthesized.ideas || [];
           synthesized.ideasSource = 'llm-failed';
