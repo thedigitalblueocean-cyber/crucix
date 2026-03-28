@@ -3,7 +3,10 @@
  * Hooks into the existing SSE /events stream.
  * Auto-injects into jarvis.html. No HTML edits needed.
  *
- * v2: EO indication on every signal row + cryptographic status badge (top-right)
+ * v3: Fixed field-name alignment with server.mjs getStatus() response
+ *     - /api/tdbo/status returns flat fields, not a components object
+ *     - EO chip falls back to sweep-level EO when idea has no eoId
+ *     - Badge GW/H•/CVS green once witnessChain has entries + stateHash set
  */
 (function () {
   'use strict';
@@ -19,7 +22,6 @@
       color: #e0f0ff;
       position: relative;
     }
-    /* ── Panel header ── */
     #tdbo-signals-panel h3 {
       margin: 0 0 12px 0;
       font-size: 11px;
@@ -65,7 +67,7 @@
     }
     #tdbo-crypto-badge .cb-item:hover { background: rgba(0,212,255,0.13); }
     #tdbo-crypto-badge .cb-item.ok   { color: #00ff88; border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.06); }
-    #tdbo-crypto-badge .cb-item.warn { color: #ffaa00; border-color: rgba(255,170,0,0.3); background: rgba(255,170,0,0.06); }
+    #tdbo-crypto-badge .cb-item.warn { color: #ffaa00; border-color: rgba(255,170,0,0.3);  background: rgba(255,170,0,0.06); }
     #tdbo-crypto-badge .cb-item.off  { color: #3a6080; border-color: rgba(100,150,180,0.15); }
     #tdbo-crypto-badge .cb-dot {
       width: 5px; height: 5px; border-radius: 50%;
@@ -102,7 +104,6 @@
     .chip-monitor { background:#aaaaff22; color:#aaaaff; border:1px solid #aaaaff44; }
     .chip-avoid   { background:#ff880022; color:#ff8800; border:1px solid #ff880055; }
 
-    /* EO chip — always shown; greyed out when no EO id present */
     .chip-eo {
       background: rgba(0,212,255,0.08);
       color: #00d4ff;
@@ -114,6 +115,11 @@
       transition: background 0.2s;
     }
     .chip-eo:hover { background: rgba(0,212,255,0.2); }
+    .chip-eo.eo-sweep {
+      color: #00aacc;
+      border-color: rgba(0,170,204,0.25);
+      background: rgba(0,170,204,0.06);
+    }
     .chip-eo.eo-missing {
       color: #2a5060;
       border-color: rgba(0,212,255,0.1);
@@ -121,7 +127,6 @@
       cursor: default;
     }
 
-    /* State-hash row under each card */
     .signal-hash-row {
       display: flex;
       align-items: center;
@@ -155,12 +160,13 @@
 
   /* ─── crypto badge state ─── */
   let cryptoState = {
-    gateway:    'pending',   // 'ok' | 'warn' | 'off'
-    stateHash:  'pending',
-    cvs512:     'pending',
+    gateway:    'off',
+    stateHash:  'off',
+    cvs512:     'off',
     anchor:     'off',
     lastHash:   null,
     lastTx:     null,
+    lastEoId:   null,   // sweep-level EO id — used as fallback for idea chips
   };
 
   function injectStyle() {
@@ -180,19 +186,15 @@
 
   function cryptoBadgeHTML() {
     const items = [
-      { id: 'cb-gateway',   label: 'GW',      state: cryptoState.gateway,   tip: 'Execution Gateway (I-1)' },
-      { id: 'cb-statehash', label: 'H\u2022',  state: cryptoState.stateHash, tip: 'State Hash (I-3)' },
-      { id: 'cb-cvs',       label: 'CVS',     state: cryptoState.cvs512,    tip: 'CVS-512 Evidence Rail' },
-      { id: 'cb-anchor',    label: '\u26d3TX', state: cryptoState.anchor,    tip: 'Ethereum anchor' },
+      { id: 'cb-gateway',   label: 'GW',     state: cryptoState.gateway,   tip: 'Execution Gateway (I-1)' },
+      { id: 'cb-statehash', label: 'H\u2022', state: cryptoState.stateHash, tip: 'State Hash (I-3)' },
+      { id: 'cb-cvs',       label: 'CVS',    state: cryptoState.cvs512,    tip: 'CVS-512 Witness Chain' },
+      { id: 'cb-anchor',    label: '\u26d3TX', state: cryptoState.anchor,   tip: 'Ethereum anchor' },
     ];
     return items.map(it => {
-      const stateClass = it.state === 'ok' ? 'ok' : it.state === 'warn' ? 'warn' : 'off';
-      const label = it.state === 'ok'
-        ? `\u2714 ${it.label}`
-        : it.state === 'warn'
-          ? `\u26a0 ${it.label}`
-          : `\u25e6 ${it.label}`;
-      return `<span class="cb-item ${stateClass}" id="${it.id}" title="${it.tip}"><span class="cb-dot"></span>${label}</span>`;
+      const cls = it.state === 'ok' ? 'ok' : it.state === 'warn' ? 'warn' : 'off';
+      const icon = it.state === 'ok' ? '\u2714' : it.state === 'warn' ? '\u26a0' : '\u25e6';
+      return `<span class="cb-item ${cls}" id="${it.id}" title="${it.tip}"><span class="cb-dot"></span>${icon} ${it.label}</span>`;
     }).join('');
   }
 
@@ -200,8 +202,6 @@
     const badge = document.getElementById('tdbo-crypto-badge');
     if (!badge) return;
     badge.innerHTML = cryptoBadgeHTML();
-
-    /* Anchor item: if we have a tx, make it a link */
     if (cryptoState.lastTx) {
       const el = document.getElementById('cb-anchor');
       if (el) {
@@ -236,7 +236,6 @@
         <div id="tdbo-signals-empty">Waiting for first governed sweep\u2026</div>
       </div>
     `;
-    /* inject crypto badge into header */
     panel.insertBefore(buildCryptoBadge(), panel.firstChild);
     return panel;
   }
@@ -265,22 +264,32 @@
 
   /**
    * EO chip — always rendered on every row.
-   * If eoId exists: shows truncated hash, click copies full id.
-   * If missing:     shows greyed "EO·pending" placeholder.
+   *
+   * Priority:
+   *   1. idea-level EO id  → cyan chip  (this idea was individually gated)
+   *   2. sweep-level EO id → dim-cyan chip  (sweep EO, shared across ideas)
+   *   3. nothing           → grey "EO·pending"
    */
-  function eoChip(eoId) {
-    if (eoId) {
-      const safe = String(eoId).replace(/'/g, '');
-      const short = safe.substring(0, 8) + '\u2026';
-      return `<span class="chip chip-eo" title="Evidence Object ID: ${safe} (click to copy)" onclick="navigator.clipboard?.writeText('${safe}').then(()=>{this.textContent='\u2714 copied';setTimeout(()=>{this.innerHTML='\u25aaEO\u00b7${short}'},1200)})">\u25aaEO\u00b7${short}</span>`;
+  function eoChip(idea) {
+    const ideaEo = idea.eoId || idea.eo_id || idea.evidenceId || idea.evidence_id || null;
+    const sweepEo = cryptoState.lastEoId || null;
+    const eoId = ideaEo || sweepEo;
+
+    if (!eoId) {
+      return `<span class="chip chip-eo eo-missing" title="No Evidence Object attached yet">\u25aaEO\u00b7pending</span>`;
     }
-    return `<span class="chip chip-eo eo-missing" title="No Evidence Object attached to this signal yet">\u25aaEO\u00b7pending</span>`;
+
+    const safe  = String(eoId).replace(/'/g, '');
+    const short = safe.substring(0, 8) + '\u2026';
+    const isSweepLevel = !ideaEo;
+    const extraClass = isSweepLevel ? ' eo-sweep' : '';
+    const tip = isSweepLevel
+      ? `Sweep-level Evidence Object: ${safe} (click to copy)`
+      : `Evidence Object ID: ${safe} (click to copy)`;
+
+    return `<span class="chip chip-eo${extraClass}" title="${tip}" onclick="navigator.clipboard?.writeText('${safe}').then(()=>{this.textContent='\u2714 copied';setTimeout(()=>{this.innerHTML='\u25aaEO\u00b7${short}'},1400)})">\u25aaEO\u00b7${short}</span>`;
   }
 
-  /**
-   * State-hash row — shown under each card.
-   * Displays signal-level state hash if present; falls back to panel-level last hash.
-   */
   function hashRow(idea) {
     const h = idea.stateHash || idea.state_hash || cryptoState.lastHash;
     if (!h) return '';
@@ -290,7 +299,7 @@
       ? `https://sepolia.etherscan.io/tx/${anchored}`
       : null;
     const hashEl = txUrl
-      ? `<span class="sh-val anchored" onclick="window.open('${txUrl}','_blank')" title="Anchored on-chain: ${anchored}">${short}</span>`
+      ? `<span class="sh-val anchored" onclick="window.open('${txUrl}','_blank')" title="${h}">${short}</span>`
       : `<span class="sh-val" title="${h}">${short}</span>`;
     return `
       <div class="signal-hash-row">
@@ -312,7 +321,7 @@
     card.innerHTML = `
       <div class="signal-header">
         ${dirChip(dir)}
-        ${eoChip(idea.eoId || idea.eo_id || idea.evidenceId || idea.evidence_id)}
+        ${eoChip(idea)}
         <span class="signal-title">${idea.title || idea.content || 'Signal'}</span>
       </div>
       <div class="signal-meta">
@@ -357,35 +366,61 @@
     updateList();
   }
 
-  /* ─── Update crypto badge from TDBO status payload ─── */
+  /* ─── Apply TDBO status — handles BOTH field layouts:
+   *
+   *   /api/data  → synthesized.tdbo  (camelCase, set by server.mjs)
+   *     { sweepId, stateHash, lastStateHash, lastEvidenceId,
+   *       ideasAdmitted, ideasRefused, lastAnchorTx }
+   *
+   *   /api/tdbo/status → tdbo.getStatus()  (flat, from tdbo/index.mjs)
+   *     { stateHash, witnessChainLength, lastAnchorTx, specHash, ... }
+   * ─── */
   function applyTdboStatus(t) {
     if (!t) return;
-    /* gateway */
-    if (t.ideasAdmitted !== undefined || t.ideasRefused !== undefined) {
-      cryptoState.gateway = 'ok';
-    }
-    /* state hash */
-    if (t.lastStateHash) {
-      cryptoState.stateHash = 'ok';
-      cryptoState.lastHash  = t.lastStateHash;
-    }
-    /* CVS-512 evidence */
-    if (t.lastEvidenceId || t.evidenceCount) {
-      cryptoState.cvs512 = 'ok';
-    }
-    /* anchor */
-    if (t.lastAnchorTx) {
-      cryptoState.anchor  = t.lastAnchorTx.startsWith('dry-run') ? 'warn' : 'ok';
-      cryptoState.lastTx  = t.lastAnchorTx;
-    }
-    updateCryptoBadge();
+    let changed = false;
 
-    /* Legacy anchor display in stats bar */
+    /* Gateway: active if witness chain has entries OR ideas have been admitted */
+    const chainLen = t.witnessChainLength ?? null;
+    const admitted = t.ideasAdmitted ?? t.total_admitted ?? null;
+    if ((chainLen !== null && chainLen > 0) || (admitted !== null && admitted > 0)) {
+      cryptoState.gateway = 'ok'; changed = true;
+    }
+
+    /* State hash: flat string from getStatus(), or lastStateHash from synthesized.tdbo */
+    const hashVal = t.lastStateHash || (typeof t.stateHash === 'string' ? t.stateHash : null);
+    if (hashVal) {
+      cryptoState.stateHash = 'ok';
+      cryptoState.lastHash  = hashVal;
+      changed = true;
+    }
+
+    /* CVS-512: witness chain has entries OR lastEvidenceId is set */
+    const lastEoId = t.lastEvidenceId || t.sweepId || null;
+    if (lastEoId || (chainLen !== null && chainLen > 0)) {
+      cryptoState.cvs512  = 'ok';
+      if (lastEoId) cryptoState.lastEoId = lastEoId;
+      changed = true;
+    }
+
+    /* Anchor */
+    const anchorTx = t.lastAnchorTx || null;
+    if (anchorTx) {
+      cryptoState.anchor = anchorTx.startsWith('dry-run') ? 'warn' : 'ok';
+      cryptoState.lastTx = anchorTx;
+      changed = true;
+    }
+
+    if (changed) {
+      updateCryptoBadge();
+      /* Re-render signal list so EO chips pick up newly discovered sweep EO */
+      if (cryptoState.lastEoId) updateList();
+    }
+
+    /* Anchor display in stats bar */
     const anchor = document.getElementById('stat-anchor');
-    if (anchor && t.lastAnchorTx) {
-      const tx    = t.lastAnchorTx;
-      const short = tx.startsWith('dry-run') ? tx : tx.substring(0, 10) + '\u2026';
-      const url   = tx.startsWith('0x') ? `https://sepolia.etherscan.io/tx/${tx}` : null;
+    if (anchor && anchorTx) {
+      const short = anchorTx.startsWith('dry-run') ? anchorTx : anchorTx.substring(0, 10) + '\u2026';
+      const url   = anchorTx.startsWith('0x') ? `https://sepolia.etherscan.io/tx/${anchorTx}` : null;
       anchor.innerHTML = url
         ? `\u26d3 <a href="${url}" target="_blank" style="color:#00d4ff;">${short}</a>`
         : `\u26d3 ${short}`;
@@ -414,13 +449,13 @@
         addSignal({ ...msg.data, _ts: msg.data._ts || Date.now() });
         stats.admitted++;
         updateStats();
-        /* if this idea carries a state hash, surface it in crypto badge */
         if (msg.data.stateHash || msg.data.state_hash) {
           cryptoState.stateHash = 'ok';
           cryptoState.lastHash  = msg.data.stateHash || msg.data.state_hash;
         }
         if (msg.data.eoId || msg.data.eo_id || msg.data.evidenceId) {
-          cryptoState.cvs512 = 'ok';
+          cryptoState.cvs512  = 'ok';
+          cryptoState.lastEoId = msg.data.eoId || msg.data.eo_id || msg.data.evidenceId;
         }
         updateCryptoBadge();
       }
@@ -443,7 +478,20 @@
   function boot() {
     mountPanel();
 
-    /* hydrate from /api/data */
+    /* 0. Hydrate from inline __CRUCIX_DATA__ if server injected it */
+    const inline = window.__CRUCIX_DATA__;
+    if (inline) {
+      const t = inline.tdbo || {};
+      if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
+      if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
+      updateStats();
+      applyTdboStatus(t);
+      for (const idea of (inline.ideas || []).reverse()) {
+        if (idea.title || idea.content) addSignal(idea);
+      }
+    }
+
+    /* 1. Hydrate from /api/data */
     fetch('/api/data')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -459,7 +507,7 @@
       })
       .catch(() => {});
 
-    /* hydrate from /api/tdbo/signals */
+    /* 2. Hydrate from /api/tdbo/signals */
     fetch('/api/tdbo/signals')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -469,22 +517,16 @@
       })
       .catch(() => {});
 
-    /* poll /api/tdbo/status for crypto badge (every 30 s) */
+    /* 3. Poll /api/tdbo/status for crypto badge — reads flat getStatus() fields */
     function pollStatus() {
       fetch('/api/tdbo/status')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (!data) return;
-          const c = data.components || {};
-          if (c.gateway)    cryptoState.gateway   = 'ok';
-          if (c.stateHash)  { cryptoState.stateHash = 'ok'; if (c.stateHash.lastHash) cryptoState.lastHash = c.stateHash.lastHash; }
-          if (c.witnessChain || c.merkleBatch) cryptoState.cvs512 = 'ok';
-          if (c.anchor?.lastTxHash) {
-            const tx = c.anchor.lastTxHash;
-            cryptoState.anchor = tx.startsWith('dry-run') ? 'warn' : 'ok';
-            cryptoState.lastTx = tx;
-          }
-          updateCryptoBadge();
+          /* getStatus() returns flat fields: stateHash, witnessChainLength, lastAnchorTx */
+          applyTdboStatus(data);
+          /* Also check analyst sub-object */
+          if (data.analyst) applyTdboStatus(data.analyst);
         })
         .catch(() => {});
     }
