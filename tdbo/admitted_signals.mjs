@@ -1,38 +1,45 @@
+// tdbo/admitted_signals.mjs
+// Records and exposes ADMITTED signals from the 512 gateway for dashboard display.
+// Only signals that passed gateLlmOutput() are surfaced here.
+
+let _admittedSignals = [];
+
 /**
- * TDBO Admitted Signals Ring Buffer
- * Holds last 50 admitted (non-blocked) gate results for dashboard + API.
+ * Called by server.mjs after each analyzeSweep() to record admitted signals.
+ * @param {Array} ideas - analysisResults.ideas array from analyzeSweep()
  */
+export function recordAdmittedSignals(ideas = []) {
+  const admitted = ideas
+    .filter(i => i.status === 'ADMITTED')
+    .map(i => ({
+      id:         i.eo_id || `sig_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      title:      i.content || i.title || 'Untitled signal',
+      type:       (i.direction || 'monitor').toLowerCase(),
+      confidence: i.confidence || 0,
+      timeframe:  i.timeframe  || 'N/A',
+      risk:       i.risk       || 'N/A',
+      sources:    i.sources_cited || [],
+      eoId:       i.eo_id      || null,
+      timestamp:  new Date().toISOString(),
+      status:     'ADMITTED',
+    }));
 
-const MAX = 50;
-const _signals = [];
-let _stats = { admitted: 0, refused: 0, sweeps: 0 };
-
-export function recordAdmitted(idea, gateResult) {
-  const entry = {
-    title:      idea.content || idea.title || '',
-    type:       (idea.direction || idea.type || 'monitor').toLowerCase(),
-    eoId:       gateResult?.evidenceId || gateResult?.eo?.id || null,
-    confidence: idea.confidence || 0,
-    timeframe:  idea.timeframe || null,
-    risk:       idea.risk || null,
-    sources:    idea.sources_cited || [],
-    source:     'tdbo-analyst',
-    sweep_id:   idea.sweep_id || null,
-    _ts:        Date.now(),
-  };
-  _signals.unshift(entry);
-  if (_signals.length > MAX) _signals.pop();
-  _stats.admitted++;
-  return entry;
+  // Prepend new signals, keep last 50
+  _admittedSignals = [...admitted, ..._admittedSignals].slice(0, 50);
 }
 
-export function recordRefused() { _stats.refused++; }
-export function recordSweep()  { _stats.sweeps++;  }
-
+/**
+ * Returns the last N admitted signals (default 50).
+ * @param {number} n
+ * @returns {Array}
+ */
 export function getSignals(n = 50) {
-  return _signals.slice(0, n);
+  return _admittedSignals.slice(0, n);
 }
 
-export function getStats() {
-  return { ..._stats };
+/**
+ * Clears all stored signals (used on server restart if needed).
+ */
+export function clearSignals() {
+  _admittedSignals = [];
 }
