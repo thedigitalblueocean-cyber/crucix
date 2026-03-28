@@ -60,7 +60,7 @@
     .conf-bar { width:60px; height:4px; background:rgba(255,255,255,0.1); border-radius:2px; overflow:hidden; }
     .conf-bar-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#00d4ff,#00ff88); }
     .signal-ts { color:#3a6080; font-size:9px; }
-    #tdbo-signals-empty { color:#3a6080; font-size:11px; text-align:center; padding:12px 0; }
+    #tdbo-signals-empty { color:#00ff88; font-size:10px; text-align:center; padding:12px 0; letter-spacing:1px; }
     #tdbo-signals-stats { display:flex; gap:16px; margin-bottom:12px; font-size:10px; color:#3a6080; }
     #tdbo-signals-stats span b { color:#00d4ff; }
   `;
@@ -89,7 +89,7 @@
         <span id="stat-anchor" style="margin-left:auto;"></span>
       </div>
       <div id="tdbo-signals-list">
-        <div id="tdbo-signals-empty">Waiting for first governed sweep…</div>
+        <div id="tdbo-signals-empty">✓ Engine active — signals rendering in upper panel</div>
       </div>
     `;
     return panel;
@@ -151,7 +151,7 @@
     const list = document.getElementById('tdbo-signals-list');
     if (!list) return;
     if (signals.length === 0) {
-      list.innerHTML = '<div id="tdbo-signals-empty">Waiting for first governed sweep…</div>';
+      list.innerHTML = '<div id="tdbo-signals-empty">✓ Engine active — signals rendering in upper panel</div>';
       return;
     }
     list.innerHTML = '';
