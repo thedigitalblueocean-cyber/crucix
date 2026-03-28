@@ -9,7 +9,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="https://d3js.org/topojson.v3.min.js"></script>
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
 <script src="https://unpkg.com/globe.gl@2.33.0"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -643,7 +642,7 @@ function renderLeftRail(){
     </div>
     <div class="g-panel">
       <div class="sec-head"><h3>${t('panels.riskGauges','Risk Gauges')}</h3><span class="badge">${t('badges.stress','STRESS')}</span></div>
-      <div class="econ-row"><span class="elabel">${t('metrics.vix','VIX')} (Fear)</span><span class="eval" style="color:${vix?.value>20?'var(--warn)':'var(--accent)'}">${vix?.value||'--'}</span></div>
+      <div class="econ-row"><span class="elabel">${t('metrics.vix','VIX')} (Fear)</span><span class="eval" style="color:${vix?.value>20?'var(--warn)':'var(--accent)'}${vix?.value||'--'}</span></div>
       <div class="econ-row"><span class="elabel">${t('metrics.hySpread','HY Spread')}</span><span class="eval">${hy?.value||'--'}</span></div>
       <div class="econ-row"><span class="elabel">${t('metrics.usdIndex','USD Index')}</span><span class="eval">${usd?.value?.toFixed(1)||'--'}</span></div>
       <div class="econ-row"><span class="elabel">${t('metrics.joblessClaims','Jobless Claims')}</span><span class="eval">${claims?.value?.toLocaleString()||'--'}</span></div>
@@ -774,6 +773,9 @@ function initGlobe(){
   const scene = globe.scene();
   const renderer = globe.renderer();
   renderer.setClearColor(0x000000, 0);
+
+  // THREE is exposed globally by globe.gl — no separate import needed
+  const THREE = window.THREE;
 
   // Add subtle stars background
   const starGeom = new THREE.BufferGeometry();
@@ -1529,7 +1531,7 @@ function renderRight(){
       <div class="sec-head"><h3>${t('panels.sweepDelta','Sweep Delta')}</h3><span class="badge ${dirClass}">${dirEmoji} ${ds.direction?t('delta.'+ds.direction,ds.direction.toUpperCase()):t('delta.baseline','BASELINE')}</span></div>
       ${hasDelta?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;font-family:var(--mono);font-size:10px">
         <span style="color:var(--dim)">${t('delta.changes','Changes')}: <span style="color:var(--accent)">${ds.totalChanges}</span></span>
-        <span style="color:var(--dim)">${t('delta.critical','Critical')}: <span style="color:${ds.criticalChanges>0?'var(--warn)':'var(--dim)'}">${ds.criticalChanges||0}</span></span>
+        <span style="color:var(--dim)">${t('delta.critical','Critical')}: <span style="color:${ds.criticalChanges>0?'var(--warn)':'var(--dim)'}>${ds.criticalChanges||0}</span></span>
         ${ds.signalBreakdown?`<span style="color:var(--dim)">${t('delta.new','New')}: <span style="color:#4dd0e1">${ds.signalBreakdown.new}</span> &#8593;${ds.signalBreakdown.escalated} &#8595;${ds.signalBreakdown.deescalated}</span>`:''}
       </div>`:''}
       <div class="delta-list">${deltaHtml}</div>
@@ -1710,4 +1712,49 @@ function connectSSE(){
         }
       } else if (msg.type === 'sweep_start') {
         const badge = document.querySelector('.alert-badge');
-        if (badge) { badge.textContent = 'SWEEPING...'; badge.style.borderColor =
+        if (badge) { badge.textContent = 'SWEEPING...'; badge.style.borderColor = 'var(--accent2)'; }
+      } else if (msg.type === 'sweep_end') {
+        const badge = document.querySelector('.alert-badge');
+        if (badge) { badge.textContent = 'HIGH ALERT'; badge.style.borderColor = ''; }
+      }
+    } catch(err) { /* ignore parse errors */ }
+  };
+  es.onerror = () => {
+    // Reconnect after 30s on error
+    es.close();
+    setTimeout(connectSSE, 30000);
+  };
+}
+
+// === TICKER CLICK HANDLER ===
+document.addEventListener('click', (e) => {
+  const card = e.target.closest('.tk-card.clickable');
+  if (!card) return;
+  const url = card.dataset.url;
+  if (!url) return;
+  const safe = safeExternalUrl(url);
+  if (safe) window.open(safe, '_blank', 'noopener,noreferrer');
+});
+
+// === MAIN ENTRY ===
+(async () => {
+  try {
+    const r = await fetch('/synthesize');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    D = await r.json();
+  } catch(e) {
+    document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#ff5f63;background:#020408;flex-direction:column;gap:12px"><div style="font-size:18px">CRUCIX ENGINE OFFLINE</div><div style="font-size:12px;color:#6a8a82">Could not reach /synthesize — is the server running?</div><div style="font-size:11px;color:#6a8a82">${e.message}</div></div>`;
+    return;
+  }
+  renderGlossary();
+  renderTopbar();
+  renderLeftRail();
+  renderLower();
+  renderRight();
+  initMap();
+  runBoot();
+  connectSSE();
+})();
+</script>
+</body>
+</html>
