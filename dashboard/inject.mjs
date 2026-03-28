@@ -127,14 +127,16 @@ function loadOpenSkyFallback(currentTimestamp) {
       const prior = JSON.parse(readFileSync(filePath, 'utf8'));
       const priorTimestamp = prior.sources?.OpenSky?.timestamp || prior.crucix?.timestamp || null;
       if (priorTimestamp && Number.isFinite(currentMs) && new Date(priorTimestamp).getTime() >= currentMs) continue;
+
       const hotspots = prior.sources?.OpenSky?.hotspots || [];
       if (sumAirHotspots(hotspots) > 0) {
         return { file, timestamp: priorTimestamp, hotspots };
       }
     } catch {
-      // Ignore unreadable historical runs and continue searching backward.
+      // Ignore unreadable historical runs
     }
   }
+
   return null;
 }
 
@@ -261,7 +263,7 @@ export function generateIdeas(V2) {
     const oldest = V2.energy.wtiRecent[V2.energy.wtiRecent.length - 1];
     const pct = ((latest - oldest) / oldest * 100).toFixed(1);
     if (Math.abs(pct) > 3) {
-      ideas.push({ title: pct > 0 ? 'Oil Momentum Building' : 'Oil Under Pressure', text: `WTI moved ${pct > 0 ? '+' : ''}${pct}% to $${V2.energy.wti}/bbl.`, type: pct > 0 ? 'long' : 'watch', confidence: 'Medium', horizon: 'swing' });
+      ideas.push({ title: pct > 0 ? 'Oil Momentum Building' : 'Oil Under Pressure', text: `WTI moved ${pct > 0 ? '+' : ''}${pct}% recently to $${V2.energy.wti}/bbl.`, type: pct > 0 ? 'long' : 'watch', confidence: 'Medium', horizon: 'swing' });
     }
   }
   if (spread) {
@@ -271,46 +273,11 @@ export function generateIdeas(V2) {
   if (debt > 35e12) {
     ideas.push({ title: 'Fiscal Trajectory Supports Hard Assets', text: `National debt at $${(debt / 1e12).toFixed(1)}T.`, type: 'long', confidence: 'High', horizon: 'strategic' });
   }
-  const totalThermal = V2.thermal.reduce((s, t) => s + t.det, 0);
-  if (totalThermal > 30000 && V2.tg.urgent.length > 2) {
-    ideas.push({ title: 'Satellite Confirms Conflict Intensity', text: `${totalThermal.toLocaleString()} thermal detections + ${V2.tg.urgent.length} urgent OSINT flags.`, type: 'watch', confidence: 'Medium', horizon: 'swing' });
-  }
-  const unemployment = V2.bls.find(b => b.id === 'LNS14000000' || b.id === 'UNRATE');
-  const payrolls = V2.bls.find(b => b.id === 'CES0000000001' || b.id === 'PAYEMS');
-  if (spread && unemployment && payrolls) {
-    const weakLabor = (unemployment.value > 4.3) || (payrolls.momChange && payrolls.momChange < -50);
-    if (spread.value > 0.3 && weakLabor) {
-      ideas.push({ title: 'Steepening Curve Meets Weak Labor', text: `10Y-2Y at ${spread.value.toFixed(2)} + UE ${unemployment.value}%.`, type: 'hedge', confidence: 'High', horizon: 'tactical' });
-    }
-  }
-  const conflictEvents = V2.acled?.totalEvents || 0;
-  if (conflictEvents > 50 && V2.energy.wtiRecent.length > 1) {
-    const wtiMove = V2.energy.wtiRecent[0] - V2.energy.wtiRecent[V2.energy.wtiRecent.length - 1];
-    if (wtiMove > 2) {
-      ideas.push({ title: 'Conflict Fueling Energy Momentum', text: `${conflictEvents} ACLED events + WTI up $${wtiMove.toFixed(1)}.`, type: 'long', confidence: 'Medium', horizon: 'swing' });
-    }
-  }
-  const totalFatalities = V2.acled?.totalFatalities || 0;
-  if (totalFatalities > 500 && totalThermal > 20000) {
-    ideas.push({ title: 'Defense Procurement Acceleration Signal', text: `${totalFatalities.toLocaleString()} conflict fatalities + ${totalThermal.toLocaleString()} thermal detections.`, type: 'long', confidence: 'Medium', horizon: 'swing' });
-  }
-  if (hy && vix) {
-    if (hy.value > 3.5 && vix.value < 18) {
-      ideas.push({ title: 'Credit Stress Ignored by Equity Vol', text: `HY spread ${hy.value.toFixed(1)}% wide but VIX only ${vix.value.toFixed(0)}.`, type: 'watch', confidence: 'Medium', horizon: 'tactical' });
-    } else if (hy.value < 2.5 && vix.value > 25) {
-      ideas.push({ title: 'Equity Fear Exceeds Credit Stress', text: `VIX at ${vix.value.toFixed(0)} but HY spread only ${hy.value.toFixed(1)}%.`, type: 'watch', confidence: 'Medium', horizon: 'tactical' });
-    }
-  }
-  const ppi = V2.bls.find(b => b.id === 'WPUFD49104' || b.id === 'PCU--PCU--');
-  const cpi = V2.bls.find(b => b.id === 'CUUR0000SA0' || b.id === 'CPIAUCSL');
-  if (ppi && cpi && V2.gscpi && V2.gscpi.value > 0.5 && ppi.momChangePct > 0.3) {
-    ideas.push({ title: 'Inflation Pipeline Building Pressure', text: `GSCPI at ${V2.gscpi.value.toFixed(2)} + PPI momentum +${ppi.momChangePct?.toFixed(1)}%.`, type: 'long', confidence: 'Medium', horizon: 'strategic' });
-  }
   return ideas.slice(0, 8);
 }
 
-// === Shared core data extraction (no network calls) ===
-function extractCoreData(data) {
+// === Core synthesis logic (shared by synthesize and synthesizeFast) ===
+function buildV2(data, news) {
   const liveAirHotspots = data.sources.OpenSky?.hotspots || [];
   const airFallback = sumAirHotspots(liveAirHotspots) > 0
     ? null
@@ -371,7 +338,8 @@ function extractCoreData(data) {
   const noaa = {
     totalAlerts: data.sources.NOAA?.totalSevereAlerts || 0,
     alerts: (data.sources.NOAA?.topAlerts || []).filter(a => a.lat != null && a.lon != null).slice(0, 10).map(a => ({
-      event: a.event, severity: a.severity, headline: a.headline?.substring(0, 120), lat: a.lat, lon: a.lon
+      event: a.event, severity: a.severity, headline: a.headline?.substring(0, 120),
+      lat: a.lat, lon: a.lon
     }))
   };
   const epaData = data.sources.EPA || {};
@@ -446,11 +414,27 @@ function extractCoreData(data) {
   const yfData = data.sources.YFinance || {};
   const yfQuotes = yfData.quotes || {};
   const markets = {
-    indexes: (yfData.indexes || []).map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, changePct: q.changePct, history: q.history || [] })),
-    rates: (yfData.rates || []).map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, changePct: q.changePct })),
-    commodities: (yfData.commodities || []).map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, changePct: q.changePct, history: q.history || [] })),
-    crypto: (yfData.crypto || []).map(q => ({ symbol: q.symbol, name: q.name, price: q.price, change: q.change, changePct: q.changePct })),
-    vix: yfQuotes['^VIX'] ? { value: yfQuotes['^VIX'].price, change: yfQuotes['^VIX'].change, changePct: yfQuotes['^VIX'].changePct } : null,
+    indexes: (yfData.indexes || []).map(q => ({
+      symbol: q.symbol, name: q.name, price: q.price,
+      change: q.change, changePct: q.changePct, history: q.history || []
+    })),
+    rates: (yfData.rates || []).map(q => ({
+      symbol: q.symbol, name: q.name, price: q.price,
+      change: q.change, changePct: q.changePct
+    })),
+    commodities: (yfData.commodities || []).map(q => ({
+      symbol: q.symbol, name: q.name, price: q.price,
+      change: q.change, changePct: q.changePct, history: q.history || []
+    })),
+    crypto: (yfData.crypto || []).map(q => ({
+      symbol: q.symbol, name: q.name, price: q.price,
+      change: q.change, changePct: q.changePct
+    })),
+    vix: yfQuotes['^VIX'] ? {
+      value: yfQuotes['^VIX'].price,
+      change: yfQuotes['^VIX'].change,
+      changePct: yfQuotes['^VIX'].changePct,
+    } : null,
     timestamp: yfData.summary?.timestamp || null,
   };
   const yfWti = yfQuotes['CL=F'];
@@ -461,8 +445,8 @@ function extractCoreData(data) {
   if (yfNatgas?.price) energy.natgas = yfNatgas.price;
   if (yfWti?.history?.length) energy.wtiRecent = yfWti.history.map(h => h.close);
 
-  return {
-    air, thermal, tSignals, chokepoints, nuke, nukeSignals,
+  const V2 = {
+    meta: data.crucix, air, thermal, tSignals, chokepoints, nuke, nukeSignals,
     airMeta: {
       fallback: Boolean(airFallback),
       liveTotal: sumAirHotspots(liveAirHotspots),
@@ -473,84 +457,25 @@ function extractCoreData(data) {
     },
     sdr: { total: sdrNet.totalReceivers || 0, online: sdrNet.online || 0, zones: sdrZones },
     tg: { posts: tgData.totalPosts || 0, urgent: tgUrgent, topPosts: tgTop },
-    who, fred, energy, bls, treasury, gscpi, defense, noaa, epa,
-    acled, gdelt, space, health, markets, gdeltData, tgUrgent, tgTop,
-  };
-}
-
-// === synthesizeFast: no network calls — for startup preload ===
-// Skips RSS fetch. news and newsFeed will be empty arrays until the first sweep.
-export async function synthesizeFast(data) {
-  const core = extractCoreData(data);
-  const V2 = {
-    meta: data.crucix,
-    air: core.air,
-    thermal: core.thermal,
-    tSignals: core.tSignals,
-    chokepoints: core.chokepoints,
-    nuke: core.nuke,
-    nukeSignals: core.nukeSignals,
-    airMeta: core.airMeta,
-    sdr: core.sdr,
-    tg: core.tg,
-    who: core.who,
-    fred: core.fred,
-    energy: core.energy,
-    bls: core.bls,
-    treasury: core.treasury,
-    gscpi: core.gscpi,
-    defense: core.defense,
-    noaa: core.noaa,
-    epa: core.epa,
-    acled: core.acled,
-    gdelt: core.gdelt,
-    space: core.space,
-    health: core.health,
-    markets: core.markets,
-    news: [],        // filled on next sweep
-    newsFeed: buildNewsFeed([], core.gdeltData, core.tgUrgent, core.tgTop),
-    ideas: [],
-    ideasSource: 'cache',
-  };
-  return V2;
-}
-
-// === synthesize: full path with live RSS fetch — for sweep cycle ===
-export async function synthesize(data) {
-  const core = extractCoreData(data);
-  // Fetch RSS (network)
-  const news = await fetchAllNews();
-  const V2 = {
-    meta: data.crucix,
-    air: core.air,
-    thermal: core.thermal,
-    tSignals: core.tSignals,
-    chokepoints: core.chokepoints,
-    nuke: core.nuke,
-    nukeSignals: core.nukeSignals,
-    airMeta: core.airMeta,
-    sdr: core.sdr,
-    tg: core.tg,
-    who: core.who,
-    fred: core.fred,
-    energy: core.energy,
-    bls: core.bls,
-    treasury: core.treasury,
-    gscpi: core.gscpi,
-    defense: core.defense,
-    noaa: core.noaa,
-    epa: core.epa,
-    acled: core.acled,
-    gdelt: core.gdelt,
-    space: core.space,
-    health: core.health,
-    markets: core.markets,
+    who, fred, energy, bls, treasury, gscpi, defense, noaa, epa, acled, gdelt, space, health,
     news,
-    newsFeed: buildNewsFeed(news, core.gdeltData, core.tgUrgent, core.tgTop),
-    ideas: [],
-    ideasSource: 'disabled',
+    markets,
+    ideas: [], ideasSource: 'disabled',
+    newsFeed: buildNewsFeed(news, gdeltData, tgUrgent, tgTop),
   };
   return V2;
+}
+
+// === synthesizeFast: no RSS fetch — uses cached data only (~50ms) ===
+// Use this on server startup so /api/data is never 503 on first browser request.
+export async function synthesizeFast(data) {
+  return buildV2(data, []);
+}
+
+// === synthesize: full RSS fetch (~8s) — use inside runSweepCycle only ===
+export async function synthesize(data) {
+  const news = await fetchAllNews();
+  return buildV2(data, news);
 }
 
 // === Unified News Feed for Ticker ===
@@ -587,7 +512,7 @@ function buildNewsFeed(rssNews, gdeltData, tgUrgent, tgTop) {
   return selected.slice(0, 50);
 }
 
-// === CLI Mode: inject into HTML file ===
+// === CLI Mode ===
 function getCliArg(flag) {
   const idx = process.argv.indexOf(flag);
   return idx >= 0 ? process.argv[idx + 1] : null;
@@ -597,9 +522,11 @@ async function cliInject() {
   const data = JSON.parse(readFileSync(join(ROOT, 'runs/latest.json'), 'utf8'));
   const htmlOverride = getCliArg('--html');
   const shouldOpen = !process.argv.includes('--no-open');
+
   console.log('Fetching RSS news feeds...');
   const V2 = await synthesize(data);
   const llmProvider = createLLMProvider(config.llm);
+
   if (llmProvider?.isConfigured) {
     try {
       console.log(`[LLM] Generating ideas via ${llmProvider.name}...`);
@@ -608,20 +535,26 @@ async function cliInject() {
       else { V2.ideas = []; V2.ideasSource = 'llm-failed'; console.log('[LLM] No ideas returned'); }
     } catch (err) { V2.ideas = []; V2.ideasSource = 'llm-failed'; console.log('[LLM] Idea generation failed:', err.message); }
   } else { V2.ideas = []; V2.ideasSource = 'disabled'; }
-  console.log(`Generated ${V2.ideas.length} leverageable ideas`);
+
   const json = JSON.stringify(V2);
   console.log('\n--- Synthesis ---');
-  console.log('Size:', json.length, 'bytes | Air:', V2.air.length, '| Thermal:', V2.thermal.length, '| News:', V2.news.length, '| Ideas:', V2.ideas.length, '| Sources:', V2.health.length);
+  console.log('Size:', json.length, 'bytes | Air:', V2.air.length, '| Thermal:', V2.thermal.length, '| News:', V2.news.length, '| Ideas:', V2.ideas.length);
+
   const htmlPath = htmlOverride || join(ROOT, 'dashboard/public/jarvis.html');
   let html = readFileSync(htmlPath, 'utf8');
-  html = html.replace(/^(let|const) D = .*;\\s*$/m, () => 'let D = ' + json + ';');
+  html = html.replace(/^(let|const) D = .*;\s*$/m, () => 'let D = ' + json + ';');
   writeFileSync(htmlPath, html);
   console.log('Data injected into jarvis.html!');
+
   if (!shouldOpen) return;
   const openCmd = process.platform === 'win32' ? 'cmd /c start ""' : process.platform === 'darwin' ? 'open' : 'xdg-open';
   const dashUrl = htmlPath.replace(/\\/g, '/');
-  exec(`${openCmd} "${dashUrl}"`, (err) => { if (err) console.log('Could not auto-open browser:', err.message); else console.log('Dashboard opened in browser!'); });
+  exec(`${openCmd} "${dashUrl}"`, (err) => {
+    if (err) console.log('Could not auto-open browser:', err.message);
+    else console.log('Dashboard opened in browser!');
+  });
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url).replace(/\\/g, '/') === process.argv[1].replace(/\\/g, '/');
+const isMain = process.argv[1]
+  && fileURLToPath(import.meta.url).replace(/\\/g, '/') === process.argv[1].replace(/\\/g, '/');
 if (isMain) { await cliInject(); }
