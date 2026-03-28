@@ -9,7 +9,7 @@ import { exec } from 'child_process';
 import config from './crucix.config.mjs';
 import { getLocale, currentLanguage, getSupportedLocales } from './lib/i18n.mjs';
 import { fullBriefing } from './apis/briefing.mjs';
-import { synthesize, generateIdeas } from './dashboard/inject.mjs';
+import { synthesize, synthesizeFast, generateIdeas } from './dashboard/inject.mjs';
 import { MemoryManager } from './lib/delta/index.mjs';
 import { createLLMProvider } from './lib/llm/index.mjs';
 import { generateLLMIdeas } from './lib/llm/ideas.mjs';
@@ -493,16 +493,28 @@ async function start() {
     exec(`${openCmd} "http://localhost:${port}"`, (err) => {
       if (err) console.log('[Crucix] Could not auto-open browser:', err.message);
     });
-    try {
-      const existing = JSON.parse(readFileSync(join(RUNS_DIR, 'latest.json'), 'utf8'));
-      const data = await synthesize(existing);
-      currentData = data;
-      console.log('[Crucix] Loaded existing data from runs/latest.json \u2014 dashboard ready instantly');
-      broadcast({ type: 'update', data: currentData });
-    } catch {
-      console.log('[Crucix] No existing data found \u2014 first sweep required');
+
+    // ── FAST PRELOAD: Load cached data WITHOUT RSS fetch so dashboard is
+    //    immediately available. synthesizeFast() skips network calls.
+    //    The full synthesize() (with live RSS) runs in the sweep cycle below.
+    if (existsSync(join(RUNS_DIR, 'latest.json'))) {
+      try {
+        const existing = JSON.parse(readFileSync(join(RUNS_DIR, 'latest.json'), 'utf8'));
+        console.log('[Crucix] Preloading cached data (fast path, no RSS fetch)...');
+        const data = await synthesizeFast(existing);
+        currentData = data;
+        lastSweepTime = existing?.crucix?.timestamp || new Date().toISOString();
+        console.log(`[Crucix] \u2705 Dashboard ready instantly — ${data.meta?.sourcesOk}/${data.meta?.sourcesQueried} sources from cache`);
+        broadcast({ type: 'update', data: currentData });
+      } catch (preloadErr) {
+        console.warn('[Crucix] Cache preload failed (non-fatal):', preloadErr.message);
+        console.log('[Crucix] Dashboard will show loading screen until first sweep completes');
+      }
+    } else {
+      console.log('[Crucix] No cached data found — running first sweep now');
     }
-    console.log('[Crucix] Running initial sweep...');
+
+    console.log('[Crucix] Running sweep cycle...');
     runSweepCycle().catch(err => {
       console.error('[Crucix] Initial sweep failed:', err.message || err);
     });
