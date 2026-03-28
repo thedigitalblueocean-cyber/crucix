@@ -204,10 +204,16 @@ app.get('/', (req, res) => {
     const htmlPath = join(ROOT, 'dashboard/public/jarvis.html');
     let html = readFileSync(htmlPath, 'utf-8');
     const locale = getLocale();
-    const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};<\/script>`;
+    const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};
+window.__CRUCIX_DATA__ = ${JSON.stringify(currentData).replace(/<\/script>/gi, '<\\/script>')};<\/script>`;
     html = html.replace('</head>', `${localeScript}\n</head>`);
     res.type('html').send(html);
   }
+});
+
+// NEW: lightweight ready-check endpoint used by loading.html polling
+app.get('/api/ready', (req, res) => {
+  res.json({ ready: currentData !== null });
 });
 
 app.get('/api/data', (req, res) => {
@@ -256,6 +262,10 @@ app.get('/events', (req, res) => {
     'Access-Control-Allow-Origin': '*',
   });
   res.write('data: {"type":"connected"}\n\n');
+  // If data already available, immediately push an update event so loading.html redirects
+  if (currentData) {
+    res.write(`data: {"type":"update"}\n\n`);
+  }
   sseClients.add(res);
   req.on('close', () => sseClients.delete(res));
 });
@@ -468,11 +478,13 @@ async function start() {
     });
     try {
       const existing = JSON.parse(readFileSync(join(RUNS_DIR, 'latest.json'), 'utf8'));
+      console.log('[Crucix] Found runs/latest.json — synthesizing for instant load...');
       const data = await synthesize(existing);
       currentData = data;
       console.log('[Crucix] Loaded existing data from runs/latest.json \u2014 dashboard ready instantly');
       broadcast({ type: 'update', data: currentData });
-    } catch {
+    } catch (synthErr) {
+      console.error('[Crucix] Could not load runs/latest.json:', synthErr.message);
       console.log('[Crucix] No existing data found \u2014 first sweep required');
     }
     console.log('[Crucix] Running initial sweep...');
