@@ -27,6 +27,14 @@ export default {
     webhookUrl: process.env.DISCORD_WEBHOOK_URL || null, // Fallback: webhook-only alerts (no bot needed)
   },
 
+  // CVS-512 on-chain anchor (Arbitrum Sepolia by default)
+  // Leave ANCHOR_CONTRACT_ADDRESS empty to run in dry-run mode (no real tx submitted).
+  anchor: {
+    contractAddress: process.env.ANCHOR_CONTRACT_ADDRESS || null,
+    rpcUrl: process.env.ANCHOR_RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc',
+    privateKey: process.env.ANCHOR_PRIVATE_KEY || null,
+  },
+
   // Delta engine thresholds — override defaults from lib/delta/engine.mjs
   // Set to null to use built-in defaults
   delta: {
