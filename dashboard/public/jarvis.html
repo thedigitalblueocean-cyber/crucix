@@ -9,8 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="https://d3js.org/topojson.v3.min.js"></script>
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-<script src="https://unpkg.com/globe.gl@2.33.0"></script>
+<script src="./build/three.min.js"></script>
+<script src="./build/globe.gl.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -466,9 +466,9 @@ const signalGuideItems = [
     term:'CPM',
     category:'Radiation',
     meaning:'Counts per minute from a radiation monitoring source, used here for relative radiation status at a site.',
-    matters:'Useful for spotting anomalies against the site\'s normal range or comparing consecutive readings.',
+    matters:'Useful for spotting anomalies against the site’s normal range or comparing consecutive readings.',
     notMeaning:'Not a direct safety verdict on its own. Interpretation depends on local baseline and trend, not the raw number alone.',
-    example:'A site reading 33 CPM can be normal if that location\'s usual background level is in the same range.'
+    example:'A site reading 33 CPM can be normal if that location’s usual background level is in the same range.'
   },
   {
     term:'HY Spread',
@@ -1710,4 +1710,60 @@ function connectSSE(){
         }
       } else if (msg.type === 'sweep_start') {
         const badge = document.querySelector('.alert-badge');
-        if (badge) { badge.textContent = 'SWEEPING...'; badge.style.borderColor =
+        if (badge) { badge.textContent = 'SWEEPING...'; badge.style.borderColor = 'var(--accent)'; }
+      }
+    } catch {}
+  };
+  es.onerror = () => {
+    // Reconnect after 5s on error
+    es.close();
+    setTimeout(connectSSE, 5000);
+  };
+}
+
+// === INIT ===
+let booted = false;
+function init(){
+  renderTopbar();renderLeftRail();renderLower();renderRight();
+  renderGlossary();
+  initMap();
+  if (!booted) { runBoot(); booted = true; }
+  // Close popup on click outside markers
+  document.getElementById('mapContainer').addEventListener('click',e=>{
+    if(!e.target.closest('.map-popup')) closePopup();
+  });
+  // Open article links from ticker cards
+  document.addEventListener('click',e=>{
+    const card=e.target.closest('.tk-card[data-url]');
+    if(card){
+      const url=safeExternalUrl(card.dataset.url);
+      if(url) window.open(url,'_blank','noopener');
+    }
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key === 'Escape') closeGlossary();
+  });
+  syncResponsiveLayout(true);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const hasInlineData = !!(D && D.meta);
+  const canProbeApi = location.protocol !== 'file:';
+
+  if (canProbeApi && !hasInlineData) {
+    // Server mode: always fetch live data from API (ignore any stale inline D)
+    fetch('/api/data')
+      .then(r => r.json())
+      .then(data => { D = data; init(); connectSSE(); })
+      .catch(() => {
+        // Should not reach here — server routes to loading.html when no data
+        if (D && D.meta) { init(); connectSSE(); }
+      });
+  } else if (hasInlineData) {
+    // File mode: use inline data
+    init();
+  }
+});
+</script>
+</body>
+</html>
