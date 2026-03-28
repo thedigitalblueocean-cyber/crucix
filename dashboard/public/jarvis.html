@@ -9,7 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="https://d3js.org/topojson.v3.min.js"></script>
-<script src="https://unpkg.com/globe.gl@2.33.0"></script>
+<!-- LOCAL VENDOR: globe.gl (bundles Three.js as window.THREE — no separate three.min.js needed) -->
+<script src="/vendor/globe.gl.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -733,8 +734,9 @@ function initGlobe(){
   globe = Globe()
     .width(w)
     .height(h)
-    .globeImageUrl('//unpkg.com/three-globe@2.33.0/example/img/earth-night.jpg')
-    .bumpImageUrl('//unpkg.com/three-globe@2.33.0/example/img/earth-topology.png')
+    // LOCAL VENDOR: earth textures served from /vendor/
+    .globeImageUrl('/vendor/earth-night.jpg')
+    .bumpImageUrl('/vendor/earth-topology.png')
     .backgroundImageUrl('')
     .backgroundColor('rgba(0,0,0,0)')
     .atmosphereColor('#64f0c8')
@@ -774,7 +776,7 @@ function initGlobe(){
   const renderer = globe.renderer();
   renderer.setClearColor(0x000000, 0);
 
-  // THREE is exposed globally by globe.gl — no separate import needed
+  // THREE is bundled inside globe.gl and exposed as window.THREE
   const THREE = window.THREE;
 
   // Add subtle stars background
@@ -1045,18 +1047,15 @@ function plotMarkers(){
   }
   globe.arcsData(arcs);
 
-  // Zoom-aware marker sizing: scale markers and labels with camera altitude
+  // Zoom-aware marker sizing
   const onGlobeZoom = () => {
     const alt = globe.pointOfView().altitude;
     const sf = Math.max(0.6, Math.min(2.5, 1.5 / alt));
     globe.pointRadius(d => (d.size || 0.3) * sf);
-    // Hide labels when zoomed far out to reduce clutter
     const showLabels = alt < 1.8;
     globe.labelSize(d => showLabels ? (d.size || 0.4) : 0);
-    // Scale arc strokes with zoom
     globe.arcStroke(d => (d.stroke || 0.4) * Math.max(0.5, Math.min(1.5, 1.2 / alt)));
     globe.arcDashAnimateTime(lowPerfMode ? 0 : 2000);
-    // Priority-based point visibility: hide low-priority markers when zoomed out
     if(alt > 2.0){
       globe.pointsData(points.filter(p => (p.priority||3) <= 1));
     } else if(alt > 1.2){
@@ -1103,20 +1102,14 @@ function toggleFlights() {
   const btn = document.getElementById('flightToggle');
   btn.classList.toggle('off', !flightsVisible);
   if(isFlat){
-    if(flatG){
-      flatG.selectAll('*').remove();
-      drawFlatMap();
-    }
+    if(flatG){ flatG.selectAll('*').remove(); drawFlatMap(); }
     return;
   }
-  if(!globe){
-    return;
-  }
+  if(!globe) return;
   if(flightsVisible) {
-    plotMarkers(); // re-render with arcs
+    plotMarkers();
   } else {
-    globe.arcsData([]); // hide arcs
-    // Remove air-type points
+    globe.arcsData([]);
     const pts = globe.pointsData().filter(p => p.type !== 'air');
     globe.pointsData(pts);
     const lbls = globe.labelsData().filter(l => l.text && !l.text.match(/\d+$/));
@@ -1287,12 +1280,6 @@ function plotFlatMarkers(){
   }
 }
 
-// Update setRegion for flat mode
-const _origSetRegion = setRegion;
-
-// Override mapZoom for flat mode
-const _origMapZoom = mapZoom;
-
 function setRegion(r){
   currentRegion = r;
   document.querySelectorAll('.region-btn').forEach(b=>b.classList.toggle('active',b.dataset.region===r));
@@ -1354,7 +1341,6 @@ function renderLower(){
     return `<div class="spark-bar" style="height:${Math.max(pct,8)}%"></div>`;
   }).join('');
 
-  // Helper: format market quote card
   const mktCard = (q) => {
     if(!q||q.error) return '';
     const clr = q.changePct>=0?'var(--accent)':'var(--warn)';
@@ -1362,7 +1348,6 @@ function renderLower(){
     return `<div class="mc"><div class="ml">${q.name||q.symbol}</div><span class="mv" style="color:${clr}">${q.symbol.includes('BTC')||q.symbol.includes('ETH')?'$'+q.price.toLocaleString():'$'+q.price}</span><span class="ms" style="color:${clr}">${arrow} ${q.changePct>=0?'+':''}${q.changePct}%</span></div>`;
   };
 
-  // VIX from Yahoo Finance live data (fallback to FRED)
   const vixLive = mkt.vix;
   const vixFred = D.fred.find(f=>f.id==='VIXCLS');
   const vixVal = vixLive?.value || vixFred?.value;
@@ -1379,27 +1364,18 @@ function renderLower(){
     {l:'Unemployment',v:ue?`${ue.value}%`:'--',s:ue?`${ue.momChange>0?'+':''}${ue.momChange} vs prior`:'',p:44},
   ];
 
-  // Attach sparklines from FRED recent data
-  const fredSpark = (id, up) => {
-    const f = D.fred.find(f=>f.id===id);
-    return f?.recent?.length > 1 ? {spark: f.recent, sparkUp: up} : {};
-  };
   metrics[0] = {...metrics[0], spark: D.energy.wtiRecent, sparkUp: false};
 
-  // Build live market cards from Yahoo Finance
   const indexCards = (mkt.indexes||[]).map(mktCard).join('');
   const cryptoCards = (mkt.crypto||[]).map(mktCard).join('');
-  const rateCards = (mkt.rates||[]).map(mktCard).join('');
   const hasMarkets = indexCards || cryptoCards;
 
   const srcHtml=D.health.map(s=>`<div class="src-item"><div class="sd ${s.err?'err':'ok'}"></div><span>${s.n}</span></div>`).join('');
 
-  // NEWS TICKER — merges RSS + GDELT + Telegram into flowing cards (moved from right rail)
   const feed = (D.newsFeed || []).slice(0, 20);
   const srcClass = s => {
     if (!s) return 'other';
     const sl = s.toLowerCase();
-    // Africa-focused sources first (before generic DW/NYT)
     if (sl.includes('dw africa') || sl.includes('africa news') || sl.includes('nyt africa') || sl.includes('rfi')) return 'af';
     if (sl.includes('mercopress')) return 'sa';
     if (sl.includes('indian express') || sl.includes('the hindu')) return 'ind';
@@ -1422,7 +1398,6 @@ function renderLower(){
   }).join('');
   const tickerDuration = Math.max(20, feed.length * 2.5);
 
-  // Leverageable Ideas (LLM-only feature)
   const hasIdeas = D.ideas && D.ideas.length > 0;
   const ideasHtml = hasIdeas ? (D.ideas||[]).map(idea=>`
     <div class="idea-card">
@@ -1438,7 +1413,6 @@ function renderLower(){
       <div>LLM NOT CONFIGURED</div>
       <div style="font-size:9px;margin-top:6px;opacity:0.6">Set LLM_PROVIDER + credentials in .env to enable AI-powered trade ideas</div>
     </div>`;
-
 
   const tickerPanel = `<div class="g-panel lp-ticker" style="display:flex;flex-direction:column">
       <div class="sec-head"><h3>${t('panels.newsTicker','Live News Ticker')}</h3><span class="badge">${feed.length} ${t('badges.items','ITEMS')}</span></div>
@@ -1480,10 +1454,8 @@ function renderLower(){
 // === RIGHT RAIL ===
 function renderRight(){
   const mobile = isMobileLayout();
-  // CROSS-SOURCE SIGNALS — moved from lower grid to right rail
   const signals=D.tSignals.slice(0,6).map((s,i)=>`<div class="signal-row"><strong>Signal ${i+1}</strong><p>${s}</p></div>`).join('');
 
-  // OSINT TICKER — Telegram + WHO as flowing cards
   const signalMetrics=[
     {l:'Incident Tempo',v:D.tg.urgent.length,p:70},
     {l:'Air Theaters',v:D.air.length,p:60},
@@ -1493,7 +1465,6 @@ function renderRight(){
     {l:'WHO Alerts',v:D.who.length,p:40}
   ];
 
-  // DELTA PANEL — what changed since last sweep
   const delta = D.delta || {};
   const ds = delta.summary || {};
   const hasDelta = ds.totalChanges > 0;
@@ -1531,7 +1502,7 @@ function renderRight(){
       <div class="sec-head"><h3>${t('panels.sweepDelta','Sweep Delta')}</h3><span class="badge ${dirClass}">${dirEmoji} ${ds.direction?t('delta.'+ds.direction,ds.direction.toUpperCase()):t('delta.baseline','BASELINE')}</span></div>
       ${hasDelta?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;font-family:var(--mono);font-size:10px">
         <span style="color:var(--dim)">${t('delta.changes','Changes')}: <span style="color:var(--accent)">${ds.totalChanges}</span></span>
-        <span style="color:var(--dim)">${t('delta.critical','Critical')}: <span style="color:${ds.criticalChanges>0?'var(--warn)':'var(--dim)'}>${ds.criticalChanges||0}</span></span>
+        <span style="color:var(--dim)">${t('delta.critical','Critical')}: <span style="color:${ds.criticalChanges>0?'var(--warn)':'var(--dim)'}">${ds.criticalChanges||0}</span></span>
         ${ds.signalBreakdown?`<span style="color:var(--dim)">${t('delta.new','New')}: <span style="color:#4dd0e1">${ds.signalBreakdown.new}</span> &#8593;${ds.signalBreakdown.escalated} &#8595;${ds.signalBreakdown.deescalated}</span>`:''}
       </div>`:''}
       <div class="delta-list">${deltaHtml}</div>
@@ -1685,7 +1656,6 @@ function syncResponsiveLayout(force=false){
   refreshMapViewport(force && !isFlat);
 }
 
-// === REINIT (for live updates without boot sequence) ===
 function reinit(){
   renderTopbar();renderLeftRail();renderLower();renderRight();
   plotMarkers();
@@ -1694,9 +1664,7 @@ function reinit(){
 // === SSE: Live Updates from Server ===
 function connectSSE(){
   if (typeof EventSource === 'undefined') return;
-  // Only connect if served from localhost (not file://)
   if (location.protocol === 'file:') return;
-
   const es = new EventSource('/events');
   es.onmessage = (e) => {
     try {
@@ -1704,7 +1672,6 @@ function connectSSE(){
       if (msg.type === 'update' && msg.data) {
         D = msg.data;
         reinit();
-        // Flash the topbar to indicate update
         const topbar = document.querySelector('.topbar');
         if (topbar) {
           topbar.style.borderColor = 'var(--accent)';
@@ -1720,7 +1687,6 @@ function connectSSE(){
     } catch(err) { /* ignore parse errors */ }
   };
   es.onerror = () => {
-    // Reconnect after 30s on error
     es.close();
     setTimeout(connectSSE, 30000);
   };
