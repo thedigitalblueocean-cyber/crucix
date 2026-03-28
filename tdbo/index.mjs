@@ -55,16 +55,29 @@ export function onSweepComplete(sweepData) {
     });
     witnessChain.append(evidence);
     stateHash.update(sweepData);
+
+    // Add EO to Merkle batch BEFORE checking whether to flush
+    if (merkleBatch) {
+      merkleBatch.add(evidence);
+    }
+
     // Fire-and-forget Merkle anchor — never crash the sweep
     if (merkleBatch && merkleBatch.shouldFlush()) {
       Promise.resolve()
         .then(() => {
-          const root = merkleBatch.flush();
-          return anchor.submit(root);
+          const batch = merkleBatch.flush();
+          console.log(`[TDBO] Merkle flush — root: ${batch.root}, leaves: ${batch.leafCount}`);
+          return anchor.submit(batch);
+        })
+        .then(submission => {
+          if (submission?.txHash) {
+            console.log(`[TDBO] Anchor submitted — txHash: ${submission.txHash}`);
+          }
         })
         .catch(err => console.warn('[TDBO] Anchor submit failed (non-fatal):', err.message));
     }
-    console.log(`[TDBO] Sweep EO id: ${evidence.id}`);
+
+    console.log(`[TDBO] Sweep EO id: ${evidence.id} | Merkle pending: ${merkleBatch?.pending ?? 0}`);
     return evidence;
   } catch (err) {
     console.error('[TDBO] onSweepComplete error (non-fatal):', err.message);
@@ -83,6 +96,12 @@ export function onAlertDispatched(alert) {
       where: 'crucix-runtime',
     });
     witnessChain.append(evidence);
+
+    // Add alert EO to Merkle batch so alert evidence is also anchored
+    if (merkleBatch) {
+      merkleBatch.add(evidence);
+    }
+
     riskLedger.record(alert);
     return evidence;
   } catch (err) {
