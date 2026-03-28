@@ -57,7 +57,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
 </div>
 
 <script>
-const SWEEP_ESTIMATE_S = 50; // estimated sweep duration in seconds
+const SWEEP_ESTIMATE_S = 50;
 
 const lines = [
   'CRUCIX INTELLIGENCE ENGINE v2.0.0',
@@ -100,7 +100,6 @@ let countdownInterval = null;
 
 function startCountdown(elapsedSeconds) {
   let remaining = Math.max(0, SWEEP_ESTIMATE_S - elapsedSeconds);
-
   function tick() {
     if (remaining <= 0) {
       etaText.textContent = 'FINALIZING...';
@@ -112,12 +111,10 @@ function startCountdown(elapsedSeconds) {
     etaText.innerHTML = `EST. READY IN <span class="eta">~${remaining}s</span>`;
     remaining--;
   }
-
   tick();
   countdownInterval = setInterval(tick, 1000);
 }
 
-// Fetch health to get elapsed time since sweep started
 fetch('/api/health')
   .then(r => r.json())
   .then(h => {
@@ -129,7 +126,7 @@ fetch('/api/health')
   })
   .catch(() => startCountdown(0));
 
-// === SSE — wait for sweep to complete, then redirect ===
+// === Go directly to jarvis.html — avoids the / redirect loop ===
 let redirected = false;
 function goToDashboard() {
   if (redirected) return;
@@ -140,9 +137,10 @@ function goToDashboard() {
   barFill.style.width = '100%';
   etaText.textContent = '';
   statusText.textContent = 'TERMINAL READY — LOADING DASHBOARD';
-  setTimeout(() => location.replace('/'), 800);
+  setTimeout(() => location.replace('/jarvis.html'), 800);
 }
 
+// === SSE — immediate redirect if data already ready ===
 const es = new EventSource('/events');
 es.onmessage = (e) => {
   try {
@@ -158,12 +156,19 @@ es.onerror = () => {
   setTimeout(() => location.reload(), 3000);
 };
 
-// === Fallback polling — in case SSE misses the update ===
+// === Polling fallback — check /api/ready every 3s ===
 const pollInterval = setInterval(() => {
-  fetch('/api/data').then(r => {
-    if (r.ok) goToDashboard();
-  }).catch(() => {});
-}, 5000);
+  fetch('/api/ready')
+    .then(r => r.json())
+    .then(d => { if (d.ready) goToDashboard(); })
+    .catch(() => {});
+}, 3000);
+
+// Check immediately on load too
+fetch('/api/ready')
+  .then(r => r.json())
+  .then(d => { if (d.ready) goToDashboard(); })
+  .catch(() => {});
 </script>
 </body>
 </html>
