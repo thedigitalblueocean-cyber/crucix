@@ -7,6 +7,7 @@
 import { ethers } from 'ethers';
 import { MerkleTree } from 'merkletreejs';
 import { sha256 } from '@noble/hashes/sha256';
+import { EvidenceObject } from './evidence_object.mjs';
 
 const ABI = [
   'function getAnchor(uint256 batchId) view returns (bytes32, uint256, uint256, address)',
@@ -45,7 +46,6 @@ export class Verifier {
   }
 
   static verifyEvidenceObject(obj) {
-    const { EvidenceObject } = require('./evidence_object.mjs');
     return EvidenceObject.validate(obj);
   }
 
