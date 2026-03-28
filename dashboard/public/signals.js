@@ -185,9 +185,9 @@
         if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
         if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
         updateStats();
-        // Surface tdbo-analyst ideas that have an eoId
+        // Surface all ideas from any source (tdbo-analyst, llm, or unlabelled)
         for (const idea of (msg.data.ideas || [])) {
-          if (idea.source === 'tdbo-analyst' && idea.eoId) {
+          if (idea.title || idea.content) {
             addSignal({ ...idea, _ts: idea._ts || Date.now() });
           }
         }
@@ -219,14 +219,23 @@
 
   function boot() {
     mountPanel();
-fetch('/api/data').then(r=>r.json()).then(d=>{
-  const ideas = d?.tdbo?.ideas || [];
-  const el = document.getElementById('tdbo-signals-empty');
-  if(el && ideas.length){
-    el.innerHTML = ideas.map(i=>'<div style="color:#0ff;padding:4px 0;font-size:11px">'+i.title+'</div>').join('');
-  }
-}).catch(()=>{});
 
+    // Prefetch latest data: populate stats + ideas from top-level ideas array
+    fetch('/api/data')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        const t = d.tdbo || {};
+        if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
+        if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
+        updateStats();
+        for (const idea of (d.ideas || []).reverse()) {
+          if (idea.title || idea.content) addSignal(idea);
+        }
+      })
+      .catch(() => {});
+
+    // Also hydrate from the governed signals ring buffer
     fetch('/api/tdbo/signals')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -235,6 +244,7 @@ fetch('/api/data').then(r=>r.json()).then(d=>{
         for (const s of (data.signals || []).reverse()) addSignal(s);
       })
       .catch(() => {});
+
     connectSSE();
   }
 
@@ -244,12 +254,3 @@ fetch('/api/data').then(r=>r.json()).then(d=>{
     boot();
   }
 })();
-
-// Session 3.5 patch: prefetch historical on load
-fetch('/api/data').then(r=>r.json()).then(d=>{
-  const ideas = d?.tdbo?.ideas || [];
-  const el = document.getElementById('tdbo-signals-empty');
-  if(el && ideas.length) {
-    el.innerHTML = ideas.map(i=>`<div class="signal-row"><span class="eo-id">${i.eoId||''}</span> ${i.title||''}</div>`).join('');
-  }
-}).catch(()=>{});
