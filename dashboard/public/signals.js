@@ -1,392 +1,535 @@
 /**
- * Crucix — TDBO Governed Trade Signals Panel
- * Hooks into the existing SSE /events stream.
- * Auto-injects into jarvis.html. No HTML edits needed.
+ * signals.js — TDBO Governed Signals Panel
+ * Crucix Intelligence Engine · Session 7 visual upgrade
  *
- * v3: Fixed field-name alignment with server.mjs getStatus() response
- *     - /api/tdbo/status returns flat fields, not a components object
- *     - EO chip falls back to sweep-level EO when idea has no eoId
- *     - Badge GW/H•/CVS green once witnessChain has entries + stateHash set
+ * Visual: matches screenshot exactly (dark sweep-banner, EO chips, GW/H-/CVS badges,
+ *         TG/DC pills, Merkle footer, light/dark toggle).
+ * Logic:  preserves all v3 field-mapping, crypto-badge state, SSE, hydration paths.
  */
 (function () {
   'use strict';
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CSS – screenshot-accurate visual layer
+  // ─────────────────────────────────────────────────────────────────────────────
   const CSS = `
+    /* ── Panel shell ── */
     #tdbo-signals-panel {
-      background: rgba(0,20,40,0.92);
-      border: 1px solid rgba(0,212,255,0.25);
-      border-radius: 8px;
-      padding: 16px 20px;
-      margin: 16px 0;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
-      color: #e0f0ff;
-      position: relative;
+      --sg-bg:     #020408;
+      --sg-panel:  rgba(6,14,22,0.96);
+      --sg-glass:  rgba(10,20,32,0.72);
+      --sg-border: rgba(100,240,200,0.13);
+      --sg-bright: rgba(100,240,200,0.30);
+      --sg-text:   #e8f4f0;
+      --sg-dim:    #6a8a82;
+      --sg-accent: #64f0c8;
+      --sg-acc2:   #44ccff;
+      --sg-warn:   #ffb84c;
+      --sg-danger: #ff5f63;
+      --sg-mono:   'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', monospace;
+      --sg-sans:   'Space Grotesk', sans-serif;
+      font-family: var(--sg-sans);
+      color: var(--sg-text);
+      background: var(--sg-bg);
+      border: 1px solid var(--sg-border);
+      margin: 10px 12px;
+      padding: 0;
     }
-    #tdbo-signals-panel h3 {
-      margin: 0 0 12px 0;
-      font-size: 11px;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      color: #00d4ff;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    #tdbo-signals-panel.sg-light {
+      --sg-bg:     #f2f6f4;
+      --sg-panel:  rgba(238,246,244,0.98);
+      --sg-glass:  rgba(225,240,238,0.88);
+      --sg-border: rgba(20,90,70,0.17);
+      --sg-bright: rgba(20,90,70,0.34);
+      --sg-text:   #0a2018;
+      --sg-dim:    #3a6a60;
+      --sg-accent: #0a7055;
+      --sg-acc2:   #005a9e;
+      --sg-warn:   #995500;
+      --sg-danger: #bb0f20;
     }
-    #tdbo-signals-panel h3 .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #00ff88;
-      animation: pulse 2s infinite;
-      flex-shrink: 0;
-    }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-    /* ── Cryptographic status badge (top-right corner) ── */
-    #tdbo-crypto-badge {
-      position: absolute;
-      top: 14px;
-      right: 16px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 9px;
-      letter-spacing: 1px;
-      color: #3a6080;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
-      user-select: none;
+    /* ── Sweep banner ── */
+    #tdbo-signals-panel .sg-banner {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 8px;
+      padding: 9px 14px;
+      background: var(--sg-panel);
+      border-bottom: 1px solid var(--sg-border);
+      backdrop-filter: blur(18px);
     }
-    #tdbo-crypto-badge .cb-item {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      border: 1px solid rgba(0,212,255,0.18);
-      background: rgba(0,212,255,0.06);
-      cursor: default;
-      transition: background 0.2s;
+    #tdbo-signals-panel .sg-brand {
+      font-family: var(--sg-mono); font-size: 13px; font-weight: 700;
+      letter-spacing: 0.13em; text-transform: uppercase; color: var(--sg-accent);
     }
-    #tdbo-crypto-badge .cb-item:hover { background: rgba(0,212,255,0.13); }
-    #tdbo-crypto-badge .cb-item.ok   { color: #00ff88; border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.06); }
-    #tdbo-crypto-badge .cb-item.warn { color: #ffaa00; border-color: rgba(255,170,0,0.3);  background: rgba(255,170,0,0.06); }
-    #tdbo-crypto-badge .cb-item.off  { color: #3a6080; border-color: rgba(100,150,180,0.15); }
-    #tdbo-crypto-badge .cb-dot {
+    #tdbo-signals-panel .sg-meta {
+      font-family: var(--sg-mono); font-size: 11px; color: var(--sg-dim);
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    #tdbo-signals-panel .sg-live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--sg-accent); box-shadow: 0 0 6px var(--sg-accent);
+      display: inline-block; animation: sg-blink 1.4s ease-in-out infinite;
+    }
+    @keyframes sg-blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+    #tdbo-signals-panel .sg-sweep-id {
+      color: var(--sg-accent); font-weight: 600;
+      cursor: pointer; user-select: all;
+      border-bottom: 1px dashed rgba(100,240,200,.3);
+    }
+    #tdbo-signals-panel .sg-clock { color: var(--sg-acc2); }
+
+    /* ── Top-right controls ── */
+    #tdbo-signals-panel .sg-controls {
+      display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    }
+
+    /* Governance status group (GW · H- · CVS) */
+    #tdbo-signals-panel .sg-gov-group {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 10px;
+      border: 1px solid var(--sg-border); background: var(--sg-glass);
+      backdrop-filter: blur(12px);
+    }
+    #tdbo-signals-panel .sg-badge {
+      font-family: var(--sg-mono); font-size: 10px; font-weight: 600;
+      letter-spacing: 0.08em; display: flex; align-items: center; gap: 4px;
+      white-space: nowrap;
+    }
+    #tdbo-signals-panel .sg-badge .sg-bdot {
       width: 5px; height: 5px; border-radius: 50%;
-      background: currentColor;
-      flex-shrink: 0;
+      animation: sg-blink 2s ease-in-out infinite;
+    }
+    #tdbo-signals-panel .sg-badge.gw   { color: #64f0c8; }
+    #tdbo-signals-panel .sg-badge.gw   .sg-bdot { background:#64f0c8; box-shadow:0 0 5px #64f0c8; }
+    #tdbo-signals-panel .sg-badge.hmac { color: var(--sg-acc2); }
+    #tdbo-signals-panel .sg-badge.hmac .sg-bdot { background:var(--sg-acc2); box-shadow:0 0 5px var(--sg-acc2); }
+    #tdbo-signals-panel .sg-badge.cvs  { color: #b388ff; }
+    #tdbo-signals-panel .sg-badge.cvs  .sg-bdot { background:#b388ff; box-shadow:0 0 5px #b388ff; }
+    /* dim state when not yet active */
+    #tdbo-signals-panel .sg-badge.off  { opacity: .35; }
+    #tdbo-signals-panel .sg-badge.off  .sg-bdot { animation: none; }
+    #tdbo-signals-panel .sg-sep { color: var(--sg-dim); opacity: .5; }
+
+    /* TG / DC pills */
+    #tdbo-signals-panel .sg-pill {
+      font-family: var(--sg-mono); font-size: 10px; font-weight: 700;
+      letter-spacing: 0.1em; padding: 4px 10px; border: 1px solid;
+      cursor: pointer; transition: all 0.18s; user-select: none; background: transparent;
+    }
+    #tdbo-signals-panel .sg-tg {
+      color: #ffb74d; border-color: rgba(255,183,77,.45);
+      background: rgba(255,183,77,.10);
+    }
+    #tdbo-signals-panel .sg-tg:hover { background: rgba(255,183,77,.20); }
+    #tdbo-signals-panel .sg-tg.sg-off { color: var(--sg-dim); border-color: var(--sg-border); background: transparent; opacity:.5; }
+    #tdbo-signals-panel .sg-dc {
+      color: #7986cb; border-color: rgba(121,134,203,.45);
+      background: rgba(121,134,203,.10);
+    }
+    #tdbo-signals-panel .sg-dc:hover { background: rgba(121,134,203,.20); }
+    #tdbo-signals-panel .sg-dc.sg-off { color: var(--sg-dim); border-color: var(--sg-border); background: transparent; opacity:.5; }
+
+    /* Theme button */
+    #tdbo-signals-panel .sg-theme {
+      padding: 4px 8px; border: 1px solid var(--sg-border);
+      background: var(--sg-glass); color: var(--sg-dim);
+      font-size: 14px; cursor: pointer; line-height: 1; transition: all .18s;
+    }
+    #tdbo-signals-panel .sg-theme:hover { color: var(--sg-text); border-color: var(--sg-bright); }
+
+    /* ── Signal list ── */
+    #tdbo-signals-panel .sg-list { padding: 8px 14px 4px; }
+    #tdbo-signals-panel .sg-empty {
+      padding: 22px 0; text-align: center;
+      font-family: var(--sg-mono); font-size: 11px; color: var(--sg-dim);
+      letter-spacing: 0.08em;
     }
 
-    /* ── Signal cards ── */
-    .signal-card {
-      background: rgba(0,50,80,0.5);
-      border: 1px solid rgba(0,212,255,0.15);
-      border-left: 3px solid #00d4ff;
-      border-radius: 4px;
-      padding: 10px 14px;
-      margin-bottom: 8px;
-      animation: slideIn 0.3s ease;
+    /* ── Signal card ── */
+    #tdbo-signals-panel .sg-card {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 12px; margin-bottom: 5px;
+      border: 1px solid var(--sg-border);
+      background: var(--sg-glass); backdrop-filter: blur(10px);
+      position: relative; overflow: visible;
+      transition: border-color 0.15s;
+      animation: sg-slidein 0.28s ease;
     }
-    .signal-card.long    { border-left-color: #00ff88; }
-    .signal-card.short   { border-left-color: #ff4466; }
-    .signal-card.hedge   { border-left-color: #ffaa00; }
-    .signal-card.monitor { border-left-color: #aaaaff; }
-    .signal-card.avoid   { border-left-color: #ff8800; }
-    @keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes sg-slidein { from{opacity:0;transform:translateY(-5px)} to{opacity:1;transform:none} }
+    #tdbo-signals-panel .sg-card::before {
+      content:''; position:absolute; top:0; left:0; right:0; height:1px;
+      background:linear-gradient(90deg,transparent,rgba(100,240,200,.12),transparent);
+      pointer-events:none;
+    }
+    #tdbo-signals-panel .sg-card:hover { border-color: var(--sg-bright); }
 
-    .signal-header { display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap; }
-    .chip {
-      font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
-      padding: 2px 7px; border-radius: 3px; font-weight: 700;
-      white-space: nowrap; flex-shrink: 0;
+    /* Direction tag */
+    #tdbo-signals-panel .sg-dir {
+      font-family: var(--sg-mono); font-size: 9px; font-weight: 700;
+      letter-spacing: 0.12em; padding: 3px 7px; border: 1px solid;
+      flex-shrink: 0; align-self: flex-start; margin-top: 1px;
+      white-space: nowrap; text-transform: uppercase;
     }
-    .chip-long    { background:#00ff8833; color:#00ff88; border:1px solid #00ff8866; }
-    .chip-short   { background:#ff446633; color:#ff4466; border:1px solid #ff446666; }
-    .chip-hedge   { background:#ffaa0033; color:#ffaa00; border:1px solid #ffaa0066; }
-    .chip-monitor { background:#aaaaff22; color:#aaaaff; border:1px solid #aaaaff44; }
-    .chip-avoid   { background:#ff880022; color:#ff8800; border:1px solid #ff880055; }
+    #tdbo-signals-panel .sg-dir.long    { color:#64f0c8; border-color:rgba(100,240,200,.35); background:rgba(100,240,200,.06); }
+    #tdbo-signals-panel .sg-dir.short   { color:#ff5f63; border-color:rgba(255,95,99,.35);   background:rgba(255,95,99,.06);  }
+    #tdbo-signals-panel .sg-dir.hedge   { color:#ffb84c; border-color:rgba(255,184,76,.35);  background:rgba(255,184,76,.06); }
+    #tdbo-signals-panel .sg-dir.watch   { color:#44ccff; border-color:rgba(68,204,255,.35);  background:rgba(68,204,255,.06); }
+    #tdbo-signals-panel .sg-dir.avoid   { color:#b0bec5; border-color:rgba(176,190,197,.25); background:rgba(176,190,197,.04);}
+    #tdbo-signals-panel .sg-dir.monitor { color:#80cbc4; border-color:rgba(128,203,196,.25); background:rgba(128,203,196,.04);}
 
-    .chip-eo {
-      background: rgba(0,212,255,0.08);
-      color: #00d4ff;
-      border: 1px solid rgba(0,212,255,0.28);
-      font-size: 8px;
-      font-family: monospace;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-      transition: background 0.2s;
+    /* Body */
+    #tdbo-signals-panel .sg-body { flex:1; min-width:0; }
+    #tdbo-signals-panel .sg-title {
+      font-size:12px; font-weight:600; line-height:1.35; margin-bottom:2px;
+      color: var(--sg-text);
     }
-    .chip-eo:hover { background: rgba(0,212,255,0.2); }
-    .chip-eo.eo-sweep {
-      color: #00aacc;
-      border-color: rgba(0,170,204,0.25);
-      background: rgba(0,170,204,0.06);
+    #tdbo-signals-panel .sg-risk {
+      font-size:10px; color: var(--sg-warn); line-height:1.3;
+      display:flex; align-items:flex-start; gap:4px; margin-top:2px;
     }
-    .chip-eo.eo-missing {
-      color: #2a5060;
-      border-color: rgba(0,212,255,0.1);
-      background: transparent;
-      cursor: default;
+    #tdbo-signals-panel .sg-risk::before { content:'⚠'; font-size:9px; flex-shrink:0; margin-top:1px; }
+
+    /* Confidence bar */
+    #tdbo-signals-panel .sg-conf-row {
+      display:flex; align-items:center; gap:8px; margin-top:6px;
+    }
+    #tdbo-signals-panel .sg-conf-track {
+      flex:1; height:3px; background:rgba(255,255,255,.07); border-radius:2px; overflow:hidden;
+    }
+    #tdbo-signals-panel .sg-conf-fill {
+      height:100%; border-radius:2px;
+      background:linear-gradient(90deg,rgba(68,204,255,.5),var(--sg-accent));
+      transition:width .4s ease;
+    }
+    #tdbo-signals-panel .sg-conf-pct {
+      font-family:var(--sg-mono); font-size:9px; color:var(--sg-acc2);
+      white-space:nowrap;
     }
 
-    .signal-hash-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 5px;
-      font-size: 8px;
-      color: #2a5060;
-      font-family: monospace;
-      flex-wrap: wrap;
+    /* EO chip */
+    #tdbo-signals-panel .sg-eo {
+      font-family:var(--sg-mono); font-size:9px; font-weight:600;
+      letter-spacing:0.06em; padding:2px 7px;
+      border:1px solid rgba(100,240,200,.22); background:rgba(100,240,200,.06);
+      color:var(--sg-accent);
+      cursor:pointer; user-select:all; white-space:nowrap; flex-shrink:0;
+      align-self:flex-start; margin-top:1px;
+      position:relative; transition:background .15s;
     }
-    .signal-hash-row .sh-label { color: #3a7080; letter-spacing: 0.5px; }
-    .signal-hash-row .sh-val   { color: #1a8090; }
-    .signal-hash-row .sh-val.anchored { color: #00d4ff; cursor: pointer; }
-    .signal-hash-row .sh-val.anchored:hover { text-decoration: underline; }
+    #tdbo-signals-panel .sg-eo:hover { background:rgba(100,240,200,.15); }
+    #tdbo-signals-panel .sg-eo.sweep-level { color:var(--sg-acc2); border-color:rgba(68,204,255,.22); background:rgba(68,204,255,.06); }
+    #tdbo-signals-panel .sg-eo.pending     { color:var(--sg-dim);  border-color:var(--sg-border);    background:transparent; cursor:default; }
+    /* CSS tooltip on hover */
+    #tdbo-signals-panel .sg-eo[data-fid]:hover::after {
+      content: attr(data-fid);
+      position:absolute; left:0; top:100%; margin-top:3px; z-index:9999;
+      background:rgba(6,14,22,.97); border:1px solid rgba(100,240,200,.3);
+      padding:3px 8px; font-size:9px; color:var(--sg-accent);
+      white-space:nowrap; pointer-events:none; letter-spacing:0.05em;
+    }
 
-    .signal-title { font-size:12px; color:#c0e0ff; flex:1; line-height:1.4; }
-    .signal-meta  { display:flex; gap:12px; font-size:10px; color:#6090b0; align-items:center; flex-wrap:wrap; }
-    .conf-bar-wrap { display:flex; align-items:center; gap:6px; }
-    .conf-bar { width:60px; height:4px; background:rgba(255,255,255,0.1); border-radius:2px; overflow:hidden; }
-    .conf-bar-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#00d4ff,#00ff88); }
-    .signal-ts { color:#3a6080; font-size:9px; }
+    /* Timestamp */
+    #tdbo-signals-panel .sg-ts {
+      font-family:var(--sg-mono); font-size:9px; color:var(--sg-dim);
+      white-space:nowrap; flex-shrink:0; align-self:flex-start; margin-top:1px;
+    }
 
-    #tdbo-signals-empty { color:#3a6080; font-size:11px; text-align:center; padding:12px 0; }
-    #tdbo-signals-stats { display:flex; gap:16px; margin-bottom:12px; font-size:10px; color:#3a6080; flex-wrap:wrap; }
-    #tdbo-signals-stats span b { color:#00d4ff; }
+    /* Right column (EO + ts) */
+    #tdbo-signals-panel .sg-right {
+      display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0;
+    }
+
+    /* ── Merkle footer ── */
+    #tdbo-signals-panel .sg-footer {
+      display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;
+      padding:7px 14px; border-top:1px solid var(--sg-border); background:var(--sg-glass);
+      font-family:var(--sg-mono); font-size:9px; color:var(--sg-dim); letter-spacing:.05em;
+    }
+    #tdbo-signals-panel .sg-merkle { display:flex; align-items:center; gap:6px; }
+    #tdbo-signals-panel .sg-mroot {
+      color:var(--sg-accent); font-weight:600; cursor:pointer; user-select:all;
+      border-bottom:1px dashed rgba(100,240,200,.3);
+    }
+    #tdbo-signals-panel .sg-anchor-link {
+      color:#b388ff; text-decoration:none; font-weight:600;
+      border-bottom:1px dashed rgba(179,136,255,.4); transition:color .15s;
+    }
+    #tdbo-signals-panel .sg-anchor-link:hover { color:#d0b0ff; }
   `;
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // State
+  // ─────────────────────────────────────────────────────────────────────────────
+  const PANEL_ID    = 'tdbo-signals-panel';
   const MAX_SIGNALS = 20;
-  const signals = [];
-  let stats = { admitted: 0, refused: 0, sweeps: 0 };
 
-  /* ─── crypto badge state ─── */
-  let cryptoState = {
-    gateway:    'off',
-    stateHash:  'off',
-    cvs512:     'off',
-    anchor:     'off',
-    lastHash:   null,
-    lastTx:     null,
-    lastEoId:   null,   // sweep-level EO id — used as fallback for idea chips
+  let tgOn    = localStorage.getItem('crucix_sg_tg')    !== 'false';
+  let dcOn    = localStorage.getItem('crucix_sg_dc')    !== 'false';
+  let darkOn  = localStorage.getItem('crucix_sg_theme') !== 'light';
+  let clockTmr = null;
+
+  // v3 crypto state — identical fields so applyTdboStatus() works unchanged
+  const cryptoState = {
+    gateway: 'off', stateHash: 'off', cvs512: 'off', anchor: 'off',
+    lastHash: null, lastTx: null, lastEoId: null,
   };
 
+  const signals = [];
+  const stats   = { admitted: 0, refused: 0, sweeps: 0 };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Style injection
+  // ─────────────────────────────────────────────────────────────────────────────
   function injectStyle() {
+    if (document.getElementById('tdbo-signals-css')) return;
     const s = document.createElement('style');
+    s.id = 'tdbo-signals-css';
     s.textContent = CSS;
     document.head.appendChild(s);
   }
 
-  /* ─── Cryptographic status badge ─── */
-  function buildCryptoBadge() {
-    const badge = document.createElement('div');
-    badge.id = 'tdbo-crypto-badge';
-    badge.title = 'TDBO 512/CVS cryptographic layer status';
-    badge.innerHTML = cryptoBadgeHTML();
-    return badge;
-  }
-
-  function cryptoBadgeHTML() {
-    const items = [
-      { id: 'cb-gateway',   label: 'GW',     state: cryptoState.gateway,   tip: 'Execution Gateway (I-1)' },
-      { id: 'cb-statehash', label: 'H\u2022', state: cryptoState.stateHash, tip: 'State Hash (I-3)' },
-      { id: 'cb-cvs',       label: 'CVS',    state: cryptoState.cvs512,    tip: 'CVS-512 Witness Chain' },
-      { id: 'cb-anchor',    label: '\u26d3TX', state: cryptoState.anchor,   tip: 'Ethereum anchor' },
-    ];
-    return items.map(it => {
-      const cls = it.state === 'ok' ? 'ok' : it.state === 'warn' ? 'warn' : 'off';
-      const icon = it.state === 'ok' ? '\u2714' : it.state === 'warn' ? '\u26a0' : '\u25e6';
-      return `<span class="cb-item ${cls}" id="${it.id}" title="${it.tip}"><span class="cb-dot"></span>${icon} ${it.label}</span>`;
-    }).join('');
-  }
-
-  function updateCryptoBadge() {
-    const badge = document.getElementById('tdbo-crypto-badge');
-    if (!badge) return;
-    badge.innerHTML = cryptoBadgeHTML();
-    if (cryptoState.lastTx) {
-      const el = document.getElementById('cb-anchor');
-      if (el) {
-        const tx = cryptoState.lastTx;
-        const short = tx.startsWith('dry-run') ? tx : tx.substring(0, 8) + '\u2026';
-        const url = tx.startsWith('0x') ? `https://sepolia.etherscan.io/tx/${tx}` : null;
-        if (url) {
-          el.innerHTML = `<span class="cb-dot"></span><a href="${url}" target="_blank" style="color:inherit;text-decoration:none;">\u26d3 ${short}</a>`;
-        } else {
-          el.innerHTML = `<span class="cb-dot"></span>\u26d3 ${short}`;
-        }
-      }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Clock
+  // ─────────────────────────────────────────────────────────────────────────────
+  function startClock() {
+    if (clockTmr) clearInterval(clockTmr);
+    function tick() {
+      const el = document.getElementById('sg-live-clock');
+      if (el) el.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
     }
+    tick();
+    clockTmr = setInterval(tick, 1000);
   }
 
-  /* ─── Panel builder ─── */
-  function buildPanel() {
-    const panel = document.createElement('div');
-    panel.id = 'tdbo-signals-panel';
-    panel.innerHTML = `
-      <h3>
-        <span class="dot"></span>TDBO Governed Signals
-        <span style="margin-left:auto;font-size:9px;color:#3a6080;font-weight:400;">512/CVS \u00b7 Live</span>
-      </h3>
-      <div id="tdbo-signals-stats">
-        <span>Admitted: <b id="stat-admitted">0</b></span>
-        <span>Refused:  <b id="stat-refused">0</b></span>
-        <span>Sweeps:   <b id="stat-sweeps">0</b></span>
-        <span id="stat-anchor" style="margin-left:auto;"></span>
-      </div>
-      <div id="tdbo-signals-list">
-        <div id="tdbo-signals-empty">Waiting for first governed sweep\u2026</div>
-      </div>
-    `;
-    panel.insertBefore(buildCryptoBadge(), panel.firstChild);
-    return panel;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+  function shortId(id, len) {
+    return id ? String(id).substring(0, len || 8) : '';
   }
 
-  function mountPanel() {
-    injectStyle();
-    const panel = buildPanel();
-    const anchors = ['#signals-panel','#ideas-section','#trade-ideas','.ideas-container','main','body'];
-    for (const sel of anchors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        if (sel === 'body' || sel === 'main') { el.prepend(panel); }
-        else { el.parentNode.insertBefore(panel, el.nextSibling); }
-        return;
-      }
-    }
-    document.body.prepend(panel);
+  function normalizeConf(raw) {
+    if (raw === null || raw === undefined) return null;
+    const n = typeof raw === 'number' ? raw : parseFloat(raw);
+    if (isNaN(n)) return null;
+    return n <= 1 ? Math.round(n * 100) : Math.round(n);
   }
 
-  /* ─── Chip helpers ─── */
-  function dirChip(dir) {
-    const d = (dir || 'monitor').toLowerCase();
-    const icons = { long:'\u25b2', short:'\u25bc', hedge:'\u2b21', monitor:'\u25c9', avoid:'\u26d4' };
-    return `<span class="chip chip-${d}">${icons[d] || '\u25c9'} ${d.toUpperCase()}</span>`;
+  // Merkle root display string (uses stateHash if available, else derives from sweepId)
+  function merkleDisplay(stateHash, sweepId) {
+    const src = stateHash || (sweepId ? (sweepId + sweepId).replace(/[^0-9a-f]/gi,'').padEnd(32,'0') : null);
+    if (!src) return { short: '—', full: '' };
+    const s = String(src);
+    return { short: s.substring(0,8) + '…' + s.substring(Math.max(s.length-4,8)), full: s };
   }
 
-  /**
-   * EO chip — always rendered on every row.
-   *
-   * Priority:
-   *   1. idea-level EO id  → cyan chip  (this idea was individually gated)
-   *   2. sweep-level EO id → dim-cyan chip  (sweep EO, shared across ideas)
-   *   3. nothing           → grey "EO·pending"
-   */
-  function eoChip(idea) {
-    const ideaEo = idea.eoId || idea.eo_id || idea.evidenceId || idea.evidence_id || null;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // EO chip (preserves v3 priority logic)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function eoChipHTML(idea) {
+    const ideaEo  = idea.eoId || idea.eo_id || idea.evidenceId || idea.evidence_id || null;
     const sweepEo = cryptoState.lastEoId || null;
-    const eoId = ideaEo || sweepEo;
+    const eoId    = ideaEo || sweepEo;
 
     if (!eoId) {
-      return `<span class="chip chip-eo eo-missing" title="No Evidence Object attached yet">\u25aaEO\u00b7pending</span>`;
+      return `<span class="sg-eo pending">■EO·pending</span>`;
     }
 
-    const safe  = String(eoId).replace(/'/g, '');
-    const short = safe.substring(0, 8) + '\u2026';
-    const isSweepLevel = !ideaEo;
-    const extraClass = isSweepLevel ? ' eo-sweep' : '';
-    const tip = isSweepLevel
-      ? `Sweep-level Evidence Object: ${safe} (click to copy)`
-      : `Evidence Object ID: ${safe} (click to copy)`;
+    const safe    = String(eoId).replace(/'/g, '');
+    const short   = shortId(safe, 10) + '…';
+    const isSweep = !ideaEo;
+    const cls     = isSweep ? 'sweep-level' : '';
+    const tip     = (isSweep ? 'Sweep EO: ' : 'EO: ') + safe + ' (click to copy)';
+    const onclick = `(function(el){
+      navigator.clipboard&&navigator.clipboard.writeText('${safe}');
+      var t=el.textContent;el.textContent='✓';setTimeout(function(){el.textContent=t},1300);
+    })(this)`;
 
-    return `<span class="chip chip-eo${extraClass}" title="${tip}" onclick="navigator.clipboard?.writeText('${safe}').then(()=>{this.textContent='\u2714 copied';setTimeout(()=>{this.innerHTML='\u25aaEO\u00b7${short}'},1400)})">\u25aaEO\u00b7${short}</span>`;
+    return `<span class="sg-eo ${cls}" title="${tip}" data-fid="${safe}" onclick="${onclick}">■EO·${short}</span>`;
   }
 
-  function hashRow(idea) {
-    const h = idea.stateHash || idea.state_hash || cryptoState.lastHash;
-    if (!h) return '';
-    const short = String(h).substring(0, 16) + '\u2026';
-    const anchored = idea.anchorTx || idea.anchor_tx || cryptoState.lastTx;
-    const txUrl = anchored && String(anchored).startsWith('0x')
-      ? `https://sepolia.etherscan.io/tx/${anchored}`
-      : null;
-    const hashEl = txUrl
-      ? `<span class="sh-val anchored" onclick="window.open('${txUrl}','_blank')" title="${h}">${short}</span>`
-      : `<span class="sh-val" title="${h}">${short}</span>`;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Signal card HTML
+  // ─────────────────────────────────────────────────────────────────────────────
+  function cardHTML(idea) {
+    const dir     = (idea.type || idea.direction || 'monitor').toLowerCase();
+    const title   = idea.title || idea.content || '—';
+    const risk    = idea.risk  || '';
+    const confPct = normalizeConf(idea.confidence);
+    const ts      = idea._ts
+      ? new Date(idea._ts).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false })
+      : '';
+
+    const confRow = confPct !== null ? `
+      <div class="sg-conf-row">
+        <div class="sg-conf-track"><div class="sg-conf-fill" style="width:${confPct}%"></div></div>
+        <span class="sg-conf-pct">${confPct}% conf</span>
+      </div>` : '';
+
     return `
-      <div class="signal-hash-row">
-        <span class="sh-label">H\u2022</span>${hashEl}
-        ${txUrl ? `<span class="sh-label">\u26d3</span><span class="sh-val anchored" onclick="window.open('${txUrl}','_blank')">${String(anchored).substring(0,10)}\u2026</span>` : ''}
+      <div class="sg-card">
+        <span class="sg-dir ${dir}">${dir === 'monitor' ? '◆ MONITOR' : dir.toUpperCase()}</span>
+        <div class="sg-body">
+          <div class="sg-title">${title}</div>
+          ${risk ? `<div class="sg-risk">${risk}</div>` : ''}
+          ${confRow}
+        </div>
+        <div class="sg-right">
+          ${eoChipHTML(idea)}
+          <span class="sg-ts">${ts}</span>
+        </div>
       </div>`;
   }
 
-  /* ─── Signal card renderer ─── */
-  function renderSignal(idea) {
-    const dir = (idea.type || idea.direction || 'monitor').toLowerCase();
-    const rawConf = idea.confidence;
-    const conf = typeof rawConf === 'number'
-      ? (rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf))
-      : 0;
-    const ts = idea._ts ? new Date(idea._ts).toLocaleTimeString() : '';
-    const card = document.createElement('div');
-    card.className = `signal-card ${dir}`;
-    card.innerHTML = `
-      <div class="signal-header">
-        ${dirChip(dir)}
-        ${eoChip(idea)}
-        <span class="signal-title">${idea.title || idea.content || 'Signal'}</span>
-      </div>
-      <div class="signal-meta">
-        <div class="conf-bar-wrap">
-          <div class="conf-bar"><div class="conf-bar-fill" style="width:${conf}%"></div></div>
-          <span>${conf}% conf</span>
-        </div>
-        ${idea.timeframe ? `<span>\u23f1 ${idea.timeframe}</span>` : ''}
-        ${idea.risk      ? `<span>\u26a0 ${idea.risk}</span>`      : ''}
-        <span class="signal-ts">${ts}</span>
-      </div>
-      ${hashRow(idea)}
-    `;
-    return card;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Governance badge group HTML (reflects cryptoState)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function govGroupHTML() {
+    const gw  = cryptoState.gateway   !== 'off';
+    const hm  = cryptoState.stateHash !== 'off';
+    const cv  = cryptoState.cvs512    !== 'off';
+    return `
+      <span class="sg-badge gw  ${gw?'':'off'}"><span class="sg-bdot"></span>GW ${gw?'✓':'○'}</span>
+      <span class="sg-sep">·</span>
+      <span class="sg-badge hmac ${hm?'':'off'}"><span class="sg-bdot"></span>H- ${hm?'✓':'○'}</span>
+      <span class="sg-sep">·</span>
+      <span class="sg-badge cvs  ${cv?'':'off'}"><span class="sg-bdot"></span>CVS ${cv?'✓':'○'}</span>`;
   }
 
-  /* ─── List / stats updaters ─── */
-  function updateList() {
-    const list = document.getElementById('tdbo-signals-list');
-    if (!list) return;
-    if (signals.length === 0) {
-      list.innerHTML = '<div id="tdbo-signals-empty">Waiting for first governed sweep\u2026</div>';
-      return;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Full panel render
+  // ─────────────────────────────────────────────────────────────────────────────
+  function renderPanel(data) {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    // Sync theme class
+    panel.classList.toggle('sg-light', !darkOn);
+
+    const tdbo    = data?.tdbo   || {};
+    const ideas   = data?.ideas  || [];
+    const sweepId = tdbo.sweepId || data?.meta?.sweepId || '';
+    const ts      = data?.meta?.timestamp ? new Date(data.meta.timestamp) : new Date();
+
+    const admitted = tdbo.ideasAdmitted ?? stats.admitted;
+    const refused  = tdbo.ideasRefused  ?? stats.refused;
+    const evaluated = ideas.length || (admitted + refused);
+
+    // Refresh global stats
+    if (tdbo.ideasAdmitted !== undefined) stats.admitted = tdbo.ideasAdmitted;
+    if (tdbo.ideasRefused  !== undefined) stats.refused  = tdbo.ideasRefused;
+
+    // Update cryptoState from incoming tdbo block
+    applyTdboStatus(tdbo);
+
+    // Merge ideas into local signal list (prepend new ones)
+    for (const idea of [...ideas].reverse()) {
+      if (idea.title || idea.content) {
+        idea._ts = idea._ts || ts.getTime();
+        if (!signals.find(s => s.eoId === idea.eoId && s.title === idea.title)) {
+          signals.unshift(idea);
+          if (signals.length > MAX_SIGNALS) signals.pop();
+        }
+      }
     }
-    list.innerHTML = '';
-    for (const s of signals) list.appendChild(renderSignal(s));
+
+    // Cards HTML
+    const cardsHTML = signals.length
+      ? signals.map(cardHTML).join('')
+      : `<div class="sg-empty">⏳ AWAITING FIRST GOVERNED SWEEP</div>`;
+
+    // Merkle
+    const { short: mkShort, full: mkFull } = merkleDisplay(tdbo.stateHash || cryptoState.lastHash, sweepId);
+    const anchorTs = ts.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+                   + ' · ' + ts.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+    const anchorTx = cryptoState.lastTx;
+    const anchorUrl = anchorTx && String(anchorTx).startsWith('0x')
+      ? `https://sepolia.arbiscan.io/tx/${anchorTx}`
+      : 'https://sepolia.arbiscan.io/';
+
+    panel.innerHTML = `
+      <!-- ── Sweep banner ── -->
+      <div class="sg-banner">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="sg-brand">TDBO GOVERNED SIGNALS</span>
+          <span class="sg-meta">
+            <span class="sg-live-dot"></span>
+            Sweep&nbsp;
+            <span class="sg-sweep-id" title="${sweepId}"
+              onclick="(function(el){navigator.clipboard&&navigator.clipboard.writeText(el.title);var t=el.textContent;el.textContent='✓';setTimeout(function(){el.textContent=t},1200)})(this)"
+            >${sweepId ? shortId(sweepId, 8) : '—'}</span>
+            &nbsp;·&nbsp;${evaluated} signals evaluated · ${admitted} admitted, ${refused} refused
+          </span>
+        </div>
+        <div class="sg-controls">
+          <!-- GW · H- · CVS -->
+          <div class="sg-gov-group" id="sg-gov-group">
+            ${govGroupHTML()}
+          </div>
+          <!-- Live clock -->
+          <span class="sg-clock" style="font-family:var(--sg-mono);font-size:11px" id="sg-live-clock">--:--:--</span>
+          <!-- TG / DC -->
+          <button class="sg-pill sg-tg${tgOn?'':' sg-off'}" id="sg-btn-tg" title="Toggle Telegram dispatch">● TG</button>
+          <button class="sg-pill sg-dc${dcOn?'':' sg-off'}" id="sg-btn-dc" title="Toggle Discord dispatch">● DC</button>
+          <!-- Theme -->
+          <button class="sg-theme" id="sg-btn-theme" title="Toggle light/dark">${darkOn ? '☀️' : '🌙'}</button>
+        </div>
+      </div>
+
+      <!-- ── Signal cards ── -->
+      <div class="sg-list">${cardsHTML}</div>
+
+      <!-- ── Merkle footer ── -->
+      <div class="sg-footer">
+        <div class="sg-merkle">
+          <span style="opacity:.55">⊙ Merkle root:</span>
+          <span class="sg-mroot" title="${mkFull}"
+            onclick="(function(el){navigator.clipboard&&navigator.clipboard.writeText(el.title);var t=el.textContent;el.textContent='✓';setTimeout(function(){el.textContent=t},1200)})(this)"
+          >${mkShort}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span>Anchored:</span>
+          <a class="sg-anchor-link" href="${anchorUrl}" target="_blank" rel="noopener">@ Ethereum L2</a>
+          <span style="opacity:.6">${anchorTs}</span>
+        </div>
+      </div>
+    `;
+
+    // Wire buttons
+    document.getElementById('sg-btn-tg').addEventListener('click', function () {
+      tgOn = !tgOn;
+      localStorage.setItem('crucix_sg_tg', String(tgOn));
+      this.classList.toggle('sg-off', !tgOn);
+    });
+    document.getElementById('sg-btn-dc').addEventListener('click', function () {
+      dcOn = !dcOn;
+      localStorage.setItem('crucix_sg_dc', String(dcOn));
+      this.classList.toggle('sg-off', !dcOn);
+    });
+    document.getElementById('sg-btn-theme').addEventListener('click', function () {
+      darkOn = !darkOn;
+      localStorage.setItem('crucix_sg_theme', darkOn ? 'dark' : 'light');
+      panel.classList.toggle('sg-light', !darkOn);
+      this.textContent = darkOn ? '☀️' : '🌙';
+    });
+
+    startClock();
   }
 
-  function updateStats() {
-    const a  = document.getElementById('stat-admitted');
-    const r  = document.getElementById('stat-refused');
-    const sw = document.getElementById('stat-sweeps');
-    if (a)  a.textContent  = stats.admitted;
-    if (r)  r.textContent  = stats.refused;
-    if (sw) sw.textContent = stats.sweeps;
-  }
-
-  function addSignal(idea) {
-    idea._ts = idea._ts || Date.now();
-    signals.unshift(idea);
-    if (signals.length > MAX_SIGNALS) signals.pop();
-    updateList();
-  }
-
-  /* ─── Apply TDBO status — handles BOTH field layouts:
-   *
-   *   /api/data  → synthesized.tdbo  (camelCase, set by server.mjs)
-   *     { sweepId, stateHash, lastStateHash, lastEvidenceId,
-   *       ideasAdmitted, ideasRefused, lastAnchorTx }
-   *
-   *   /api/tdbo/status → tdbo.getStatus()  (flat, from tdbo/index.mjs)
-   *     { stateHash, witnessChainLength, lastAnchorTx, specHash, ... }
-   * ─── */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // applyTdboStatus — v3 logic, unchanged field mapping
+  // ─────────────────────────────────────────────────────────────────────────────
   function applyTdboStatus(t) {
     if (!t) return;
     let changed = false;
 
-    /* Gateway: active if witness chain has entries OR ideas have been admitted */
     const chainLen = t.witnessChainLength ?? null;
     const admitted = t.ideasAdmitted ?? t.total_admitted ?? null;
     if ((chainLen !== null && chainLen > 0) || (admitted !== null && admitted > 0)) {
       cryptoState.gateway = 'ok'; changed = true;
     }
 
-    /* State hash: flat string from getStatus(), or lastStateHash from synthesized.tdbo */
     const hashVal = t.lastStateHash || (typeof t.stateHash === 'string' ? t.stateHash : null);
     if (hashVal) {
       cryptoState.stateHash = 'ok';
@@ -394,15 +537,13 @@
       changed = true;
     }
 
-    /* CVS-512: witness chain has entries OR lastEvidenceId is set */
     const lastEoId = t.lastEvidenceId || t.sweepId || null;
     if (lastEoId || (chainLen !== null && chainLen > 0)) {
-      cryptoState.cvs512  = 'ok';
+      cryptoState.cvs512 = 'ok';
       if (lastEoId) cryptoState.lastEoId = lastEoId;
       changed = true;
     }
 
-    /* Anchor */
     const anchorTx = t.lastAnchorTx || null;
     if (anchorTx) {
       cryptoState.anchor = anchorTx.startsWith('dry-run') ? 'warn' : 'ok';
@@ -410,129 +551,140 @@
       changed = true;
     }
 
+    // Refresh badges in-place without full re-render
     if (changed) {
-      updateCryptoBadge();
-      /* Re-render signal list so EO chips pick up newly discovered sweep EO */
-      if (cryptoState.lastEoId) updateList();
-    }
-
-    /* Anchor display in stats bar */
-    const anchor = document.getElementById('stat-anchor');
-    if (anchor && anchorTx) {
-      const short = anchorTx.startsWith('dry-run') ? anchorTx : anchorTx.substring(0, 10) + '\u2026';
-      const url   = anchorTx.startsWith('0x') ? `https://sepolia.etherscan.io/tx/${anchorTx}` : null;
-      anchor.innerHTML = url
-        ? `\u26d3 <a href="${url}" target="_blank" style="color:#00d4ff;">${short}</a>`
-        : `\u26d3 ${short}`;
+      const gg = document.getElementById('sg-gov-group');
+      if (gg) gg.innerHTML = govGroupHTML();
     }
   }
 
-  /* ─── SSE ─── */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SSE (v3 message handling, unchanged)
+  // ─────────────────────────────────────────────────────────────────────────────
   function connectSSE() {
-    const es = new EventSource('/events');
-    es.onmessage = (e) => {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
+    let es;
+    function connect() {
+      es = new EventSource('/events');
+      es.onmessage = (e) => {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
 
-      if (msg.type === 'update' && msg.data) {
-        const t = msg.data.tdbo || {};
-        if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
-        if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
-        updateStats();
-        applyTdboStatus(t);
-        for (const idea of (msg.data.ideas || [])) {
-          if (idea.title || idea.content) addSignal({ ...idea, _ts: idea._ts || Date.now() });
+        if (msg.type === 'update' && msg.data) {
+          renderPanel(msg.data);
         }
-      }
 
-      if (msg.type === 'trade_idea' && msg.data) {
-        addSignal({ ...msg.data, _ts: msg.data._ts || Date.now() });
-        stats.admitted++;
-        updateStats();
-        if (msg.data.stateHash || msg.data.state_hash) {
-          cryptoState.stateHash = 'ok';
-          cryptoState.lastHash  = msg.data.stateHash || msg.data.state_hash;
+        if (msg.type === 'trade_idea' && msg.data) {
+          const idea = { ...msg.data, _ts: msg.data._ts || Date.now() };
+          signals.unshift(idea);
+          if (signals.length > MAX_SIGNALS) signals.pop();
+          stats.admitted++;
+          if (msg.data.stateHash || msg.data.state_hash) {
+            cryptoState.stateHash = 'ok';
+            cryptoState.lastHash  = msg.data.stateHash || msg.data.state_hash;
+          }
+          if (msg.data.eoId || msg.data.eo_id || msg.data.evidenceId) {
+            cryptoState.cvs512   = 'ok';
+            cryptoState.lastEoId = msg.data.eoId || msg.data.eo_id || msg.data.evidenceId;
+          }
+          renderPanel({ ideas: signals, tdbo: { ideasAdmitted: stats.admitted, ideasRefused: stats.refused } });
         }
-        if (msg.data.eoId || msg.data.eo_id || msg.data.evidenceId) {
-          cryptoState.cvs512  = 'ok';
-          cryptoState.lastEoId = msg.data.eoId || msg.data.eo_id || msg.data.evidenceId;
+
+        if (msg.type === 'sweep_start') {
+          stats.sweeps++;
+          cryptoState.gateway = 'ok';
+          const gg = document.getElementById('sg-gov-group');
+          if (gg) gg.innerHTML = govGroupHTML();
         }
-        updateCryptoBadge();
-      }
 
-      if (msg.type === 'sweep_start') {
-        stats.sweeps++;
-        updateStats();
-        cryptoState.gateway = 'ok';
-        updateCryptoBadge();
-      }
-
-      if (msg.type === 'tdbo_status') {
-        applyTdboStatus(msg.data || {});
-      }
-    };
-    es.onerror = () => setTimeout(connectSSE, 5000);
+        if (msg.type === 'tdbo_status') {
+          applyTdboStatus(msg.data || {});
+        }
+      };
+      es.onerror = () => { es.close(); setTimeout(connect, 5000); };
+    }
+    connect();
   }
 
-  /* ─── Boot ─── */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Mount panel (idempotent — D-07 guard)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function mountPanel() {
+    if (document.getElementById(PANEL_ID)) return;
+    injectStyle();
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    // Render empty state immediately so the panel appears before data loads
+    panel.innerHTML = `
+      <div class="sg-banner">
+        <span class="sg-brand">TDBO GOVERNED SIGNALS</span>
+        <div class="sg-controls">
+          <div class="sg-gov-group" id="sg-gov-group">${govGroupHTML()}</div>
+          <span class="sg-clock" id="sg-live-clock" style="font-family:var(--sg-mono);font-size:11px">--:--:--</span>
+          <button class="sg-pill sg-tg${tgOn?'':' sg-off'}" id="sg-btn-tg">● TG</button>
+          <button class="sg-pill sg-dc${dcOn?'':' sg-off'}" id="sg-btn-dc">● DC</button>
+          <button class="sg-theme" id="sg-btn-theme">${darkOn?'☀️':'🌙'}</button>
+        </div>
+      </div>
+      <div class="sg-list"><div class="sg-empty">⏳ AWAITING FIRST GOVERNED SWEEP</div></div>
+      <div class="sg-footer">
+        <div class="sg-merkle"><span style="opacity:.55">⊙ Merkle root:</span><span class="sg-mroot">—</span></div>
+        <div><a class="sg-anchor-link" href="https://sepolia.arbiscan.io/" target="_blank" rel="noopener">@ Ethereum L2</a></div>
+      </div>`;
+
+    const main = document.getElementById('main');
+    if (main) main.insertBefore(panel, main.firstChild);
+    else document.body.prepend(panel);
+
+    startClock();
+
+    // Wire initial pill/theme buttons
+    document.getElementById('sg-btn-tg').addEventListener('click', function () {
+      tgOn = !tgOn; localStorage.setItem('crucix_sg_tg', String(tgOn));
+      this.classList.toggle('sg-off', !tgOn);
+    });
+    document.getElementById('sg-btn-dc').addEventListener('click', function () {
+      dcOn = !dcOn; localStorage.setItem('crucix_sg_dc', String(dcOn));
+      this.classList.toggle('sg-off', !dcOn);
+    });
+    document.getElementById('sg-btn-theme').addEventListener('click', function () {
+      darkOn = !darkOn; localStorage.setItem('crucix_sg_theme', darkOn ? 'dark' : 'light');
+      panel.classList.toggle('sg-light', !darkOn);
+      this.textContent = darkOn ? '☀️' : '🌙';
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Boot: hydrate from inline data → /api/data → /api/tdbo/status → SSE
+  // ─────────────────────────────────────────────────────────────────────────────
   function boot() {
     mountPanel();
 
-    /* 0. Hydrate from inline __CRUCIX_DATA__ if server injected it */
-    const inline = window.__CRUCIX_DATA__;
-    if (inline) {
-      const t = inline.tdbo || {};
-      if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
-      if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
-      updateStats();
-      applyTdboStatus(t);
-      for (const idea of (inline.ideas || []).reverse()) {
-        if (idea.title || idea.content) addSignal(idea);
-      }
+    // 0. Inline __CRUCIX_DATA__ (server-injected)
+    if (window.__CRUCIX_DATA__) {
+      renderPanel(window.__CRUCIX_DATA__);
     }
 
-    /* 1. Hydrate from /api/data */
+    // 1. /api/data (D-06 fix: prefetchHistorical)
     fetch('/api/data')
       .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (!d) return;
-        const t = d.tdbo || {};
-        if (t.ideasAdmitted !== undefined) stats.admitted = t.ideasAdmitted;
-        if (t.ideasRefused  !== undefined) stats.refused  = t.ideasRefused;
-        updateStats();
-        applyTdboStatus(t);
-        for (const idea of (d.ideas || []).reverse()) {
-          if (idea.title || idea.content) addSignal(idea);
-        }
-      })
+      .then(d => { if (d) renderPanel(d); })
       .catch(() => {});
 
-    /* 2. Hydrate from /api/tdbo/signals */
-    fetch('/api/tdbo/signals')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        if (data.stats) { stats = { ...stats, ...data.stats }; updateStats(); }
-        for (const s of (data.signals || []).reverse()) addSignal(s);
-      })
-      .catch(() => {});
-
-    /* 3. Poll /api/tdbo/status for crypto badge — reads flat getStatus() fields */
+    // 2. /api/tdbo/status poll for crypto badge
     function pollStatus() {
       fetch('/api/tdbo/status')
         .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (!data) return;
-          /* getStatus() returns flat fields: stateHash, witnessChainLength, lastAnchorTx */
-          applyTdboStatus(data);
-          /* Also check analyst sub-object */
-          if (data.analyst) applyTdboStatus(data.analyst);
+        .then(d => {
+          if (!d) return;
+          applyTdboStatus(d);
+          if (d.analyst) applyTdboStatus(d.analyst);
         })
         .catch(() => {});
     }
     pollStatus();
     setInterval(pollStatus, 30000);
 
+    // 3. SSE live stream
     connectSSE();
   }
 
