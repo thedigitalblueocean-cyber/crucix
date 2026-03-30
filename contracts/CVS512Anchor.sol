@@ -1,12 +1,19 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.20;
 
 /**
  * @title CVS512Anchor
- * @notice On-chain Merkle anchor + drift detection for TDBO governance layer
- * @dev Copyright (c) 2026 The Digital Blue Ocean Ltd (DIFC)
+ * @notice TDBO Cryptographic Verification Sidecar — on-chain Merkle root registry
+ * @dev Implements Invariant I-4: external verification without operator cooperation.
+ *      Any third party can call getAnchor(batchId) to retrieve the committed
+ *      Merkle root and verify any Evidence Object against it independently.
+ *
+ * Deployed on: Arbitrum Sepolia
+ * Copyright (c) 2026 The Digital Blue Ocean Ltd (DIFC)
  */
 contract CVS512Anchor {
+    // ── Storage ──────────────────────────────────────────────────────────────
+
     struct Batch {
         bytes32 merkleRoot;
         uint256 leafCount;
@@ -14,74 +21,69 @@ contract CVS512Anchor {
         address submitter;
     }
 
-    Batch[] public batches;
-    mapping(address => bool) public authorizedSubmitters;
+    Batch[] private _batches;
     address public owner;
-    uint256 public maxDriftSeconds = 900; // 15 minutes
 
-    event BatchAnchored(uint256 indexed batchId, bytes32 merkleRoot, uint256 leafCount);
-    event DriftDetected(uint256 indexed batchId, uint256 drift);
-    event SubmitterAuthorized(address indexed submitter);
-    event SubmitterRevoked(address indexed submitter);
+    // ── Events ───────────────────────────────────────────────────────────────
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "CVS512: not owner");
-        _;
-    }
+    event BatchAnchored(
+        uint256 indexed batchId,
+        bytes32 merkleRoot,
+        uint256 leafCount
+    );
 
-    modifier onlyAuthorized() {
-        require(authorizedSubmitters[msg.sender], "CVS512: not authorized");
-        _;
-    }
+    // ── Constructor ──────────────────────────────────────────────────────────
 
     constructor() {
         owner = msg.sender;
-        authorizedSubmitters[msg.sender] = true;
     }
 
-    function authorizeSubmitter(address submitter) external onlyOwner {
-        authorizedSubmitters[submitter] = true;
-        emit SubmitterAuthorized(submitter);
-    }
+    // ── Write ────────────────────────────────────────────────────────────────
 
-    function revokeSubmitter(address submitter) external onlyOwner {
-        authorizedSubmitters[submitter] = false;
-        emit SubmitterRevoked(submitter);
-    }
+    /**
+     * @notice Anchor a Merkle batch root on-chain.
+     * @param merkleRoot  Hex-encoded Merkle root of a CVS-512 evidence batch.
+     * @param leafCount   Number of Evidence Objects in the batch.
+     */
+    function anchorBatch(bytes32 merkleRoot, uint256 leafCount) external {
+        require(merkleRoot != bytes32(0), 'CVS512: empty root');
+        require(leafCount > 0,           'CVS512: empty batch');
 
-    function anchorBatch(bytes32 merkleRoot, uint256 leafCount) external onlyAuthorized {
-        uint256 batchId = batches.length;
-
-        // Drift detection
-        if (batches.length > 0) {
-            uint256 lastTs = batches[batches.length - 1].timestamp;
-            uint256 drift = block.timestamp - lastTs;
-            if (drift > maxDriftSeconds * 2) {
-                emit DriftDetected(batchId, drift);
-            }
-        }
-
-        batches.push(Batch({
+        uint256 batchId = _batches.length;
+        _batches.push(Batch({
             merkleRoot: merkleRoot,
-            leafCount: leafCount,
-            timestamp: block.timestamp,
-            submitter: msg.sender
+            leafCount:  leafCount,
+            timestamp:  block.timestamp,
+            submitter:  msg.sender
         }));
 
         emit BatchAnchored(batchId, merkleRoot, leafCount);
     }
 
-    function getAnchor(uint256 batchId) external view returns (bytes32, uint256, uint256, address) {
-        require(batchId < batches.length, "CVS512: invalid batchId");
-        Batch memory b = batches[batchId];
+    // ── Read ─────────────────────────────────────────────────────────────────
+
+    /**
+     * @notice Retrieve a previously anchored batch.
+     * @param batchId  Zero-based sequential batch index.
+     * @return merkleRoot  The committed Merkle root.
+     * @return leafCount   Number of leaves in the batch.
+     * @return timestamp   Block timestamp at anchoring.
+     * @return submitter   Address that submitted the batch.
+     */
+    function getAnchor(uint256 batchId)
+        external
+        view
+        returns (bytes32, uint256, uint256, address)
+    {
+        require(batchId < _batches.length, 'CVS512: batch not found');
+        Batch storage b = _batches[batchId];
         return (b.merkleRoot, b.leafCount, b.timestamp, b.submitter);
     }
 
+    /**
+     * @notice Total number of anchored batches.
+     */
     function batchCount() external view returns (uint256) {
-        return batches.length;
-    }
-
-    function setMaxDrift(uint256 _seconds) external onlyOwner {
-        maxDriftSeconds = _seconds;
+        return _batches.length;
     }
 }
