@@ -4,6 +4,10 @@
  * Invariants: I-1 (non-bypassable gateway), I-2 (synchronous evidence before dispatch)
  *
  * TDBO 512/CVS · Session 8 · 30 March 2026
+ *
+ * Root-cause patch AT-3-E:
+ *   MerkleBatch.flush() returns a batch object { root, leafCount, timestamp, proofs },
+ *   not a plain string. Root is at batch.root (hex string prefixed '0x...').
  */
 
 import { EvidenceObject } from './evidence_object.mjs';
@@ -12,7 +16,7 @@ import { MerkleBatch } from './merkle_batch.mjs';
 import { RiskLedger } from '../icl/risk_ledger.mjs';
 import { AlertDispatch } from '../alert_dispatch.mjs';
 
-// ── Test harness ──────────────────────────────────────────────────────────────
+// ── Test harness ────────────────────────────────────────────────────────────
 let passed = 0;
 let failed = 0;
 const results = [];
@@ -29,7 +33,7 @@ function assert(label, condition, detail = '') {
   }
 }
 
-// ── Shared infrastructure ─────────────────────────────────────────────────────
+// ── Shared infrastructure ────────────────────────────────────────────────────
 const witnessChain = new WitnessChain();
 const merkleBatch  = new MerkleBatch();
 const riskLedger   = new RiskLedger();
@@ -49,7 +53,7 @@ const dcDispatched  = [];
 const tgStub  = async (alert) => { tgDispatched.push(alert);  return { ok: true, channel: 'telegram' }; };
 const dcStub  = async (alert) => { dcDispatched.push(alert);  return { ok: true, channel: 'discord'  }; };
 
-// ── Construct AlertDispatch with CVS-512 wiring ───────────────────────────────
+// ── Construct AlertDispatch with CVS-512 wiring ──────────────────────────────
 const alertDispatch = new AlertDispatch({
   gateway:       gatewayStub,
   evidenceObject: EvidenceObject,
@@ -58,13 +62,13 @@ const alertDispatch = new AlertDispatch({
 alertDispatch.registerChannel('telegram', tgStub);
 alertDispatch.registerChannel('discord',  dcStub);
 
-// ── Capture AlertDispatched event ─────────────────────────────────────────────
+// ── Capture AlertDispatched event ────────────────────────────────────────────
 const capturedEvents = [];
 alertDispatch.on('AlertDispatched', (record) => {
   capturedEvents.push(record);
 });
 
-// ── TEST FIXTURE: admitted alert ──────────────────────────────────────────────
+// ── TEST FIXTURE: admitted alert ─────────────────────────────────────────────
 const testAlert = {
   type:     'FLASH',
   severity: 'high',
@@ -75,7 +79,7 @@ const testAlert = {
   confidence: 0.87
 };
 
-console.log('\n── AT-3: Alert Dispatch — Governed ─────────────────────────────────────────\n');
+console.log('\n── AT-3: Alert Dispatch — Governed ────────────────────────────────────────\n');
 
 // ── A: dispatch() returns a record ───────────────────────────────────────────
 console.log('Group A — Basic dispatch record');
@@ -90,11 +94,10 @@ console.log('\nGroup B — I-1: Gateway non-bypassable');
 assert('B-1: gatewayStub.validate() was called',             gatewayStub._callCount >= 1);
 assert('B-2: record.gatewayResult.admitted === true',        record.gatewayResult && record.gatewayResult.admitted === true);
 
-// ── C: I-2 — EO is recorded synchronously, evidenceId present before channels ─
+// ── C: I-2 — EO is recorded synchronously, evidenceId present before channels
 console.log('\nGroup C — I-2: Evidence recorded synchronously');
 assert('C-1: record.evidenceId is a non-empty string',       typeof record.evidenceId === 'string' && record.evidenceId.length > 0);
 
-// The WitnessChain must already hold the EO for this dispatch
 const chainExport = witnessChain.export();
 const chainEntry  = chainExport.entries.find(e => e.evidenceId === record.evidenceId);
 assert('C-2: EO is present in WitnessChain',                 chainEntry !== undefined);
@@ -103,8 +106,6 @@ assert('C-4: chain head is a 64-char hex string',            typeof witnessChain
 
 // ── D: ALERTDISPATCHED EO structure ──────────────────────────────────────────
 console.log('\nGroup D — ALERTDISPATCHED EO structure');
-// Find the EO from witnessChain.export(); we need to rebuild it to validate
-// We re-create the EO using same API call as alert_dispatch.mjs does
 const eoPayload = {
   type:           'alert_dispatch',
   dispatchId:     record.dispatchId,
@@ -126,17 +127,22 @@ assert('D-8: eo.evidence_hash is 64-char hex',               typeof eo.evidence_
 assert('D-9: eo.payload_hash is 64-char hex',                typeof eo.payload_hash === 'string' && eo.payload_hash.length === 64);
 assert('D-10: eo is frozen (Object.isFrozen)',               Object.isFrozen(eo));
 
-// ── E: MerkleBatch — EO can be batched and flushed ────────────────────────────
+// ── E: MerkleBatch — flush() returns batch object; root at batch.root ─────────
+// AT-3-E patch: flush() returns { root, leafCount, timestamp, proofs }, not a string.
 console.log('\nGroup E — MerkleBatch with ALERTDISPATCHED EO');
 merkleBatch.add(eo);
-const root1 = merkleBatch.flush();
+const batch1 = merkleBatch.flush();
 
 const merkleBatch2 = new MerkleBatch();
 merkleBatch2.add(eo);
-const root2 = merkleBatch2.flush();
+const batch2 = merkleBatch2.flush();
 
-assert('E-1: MerkleBatch.flush() returns a non-empty string', typeof root1 === 'string' && root1.length > 0);
-assert('E-2: Same EO → same Merkle root (determinism)',       root1 === root2);
+assert('E-1: flush() returns a batch object (not null)',      batch1 !== null && typeof batch1 === 'object');
+assert('E-2: batch.root is a non-empty string',              typeof batch1.root === 'string' && batch1.root.length > 0);
+assert('E-3: batch.leafCount === 1',                         batch1.leafCount === 1);
+assert('E-4: Same EO → same Merkle root (determinism)',      batch1.root === batch2.root);
+assert('E-5: batch.proofs is an array of length 1',          Array.isArray(batch1.proofs) && batch1.proofs.length === 1);
+assert('E-6: proof[0].leaf is a hex string',                 typeof batch1.proofs[0].leaf === 'string' && batch1.proofs[0].leaf.length === 64);
 
 // ── F: RiskLedger records the alert ──────────────────────────────────────────
 console.log('\nGroup F — RiskLedger');
@@ -154,7 +160,7 @@ assert('F-7: exportDFSA().entity correct',                   dfsa.entity === 'Th
 assert('F-8: exportDFSA().jurisdiction === "DIFC"',          dfsa.jurisdiction === 'DIFC');
 assert('F-9: exportDFSA().integrityHash is 64-char hex',     typeof dfsa.integrityHash === 'string' && dfsa.integrityHash.length === 64);
 
-// ── G: TG / DC channel stubs received the alert ───────────────────────────────
+// ── G: TG / DC channel stubs received the alert ──────────────────────────────
 console.log('\nGroup G — TG / DC channel dispatch');
 assert('G-1: Telegram stub received the alert',              tgDispatched.length === 1);
 assert('G-2: Discord stub received the alert',               dcDispatched.length === 1);
@@ -168,7 +174,7 @@ assert('H-1: AlertDispatched event was emitted',             capturedEvents.leng
 assert('H-2: event record.dispatchId matches',               capturedEvents[0].dispatchId === record.dispatchId);
 assert('H-3: event record.status === "dispatched"',          capturedEvents[0].status === 'dispatched');
 
-// ── I: Refused path — gateway blocks, EO still emitted (I-2 sync) ────────────
+// ── I: Refused path — gateway blocks, channels NOT called ────────────────────
 console.log('\nGroup I — Refused path (gateway blocks)');
 const refusingGateway = { validate: () => ({ admitted: false, reason: 'test_block' }) };
 const refusedDispatch = new AlertDispatch({
@@ -185,7 +191,7 @@ assert('I-1: refused record.status === "refused"',           refusedRecord.statu
 assert('I-2: AlertRefused event emitted',                    refusedEvents.length === 1);
 assert('I-3: tgStub NOT called on refused path',             tgDispatched.length === 1); // still 1, not 2
 
-// ── J: getStats() reflects correct counts ─────────────────────────────────────
+// ── J: getStats() reflects correct counts ────────────────────────────────────
 console.log('\nGroup J — getStats()');
 const stats = alertDispatch.getStats();
 assert('J-1: stats.total === 1',                             stats.total === 1);
