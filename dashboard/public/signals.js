@@ -1,16 +1,22 @@
 /**
  * signals.js — TDBO Governed Signals Panel
- * Crucix Intelligence Engine · Session 7 visual upgrade
+ * Crucix Intelligence Engine · Session 7 visual patch (Session 7b)
  *
- * Visual: matches screenshot exactly (dark sweep-banner, EO chips, GW/H-/CVS badges,
- *         TG/DC pills, Merkle footer, light/dark toggle).
- * Logic:  preserves all v3 field-mapping, crypto-badge state, SSE, hydration paths.
+ * Changes from Session 7:
+ *   1. EO chip colour — ALL chips (idea-level + sweep-level) use --sg-accent (green).
+ *      sweep-level chips previously fell through to --sg-acc2 (blue) because the
+ *      .sweep-level override set color:var(--sg-acc2). Removed that override so both
+ *      variants render in TDBO teal green.
+ *   2. Header control row split into TWO stacked rows so governance badges and
+ *      TG/DC/clock never overlap, even on narrow panels:
+ *        Row 1 (top):    ● GW ✓ · ● H- ✓ · ● CVS ✓   |   512/CVS Live
+ *        Row 2 (bottom): clock  ·  ● TG  ·  ● DC  ·  ☀️
  */
 (function () {
   'use strict';
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // CSS – screenshot-accurate visual layer
+  // CSS
   // ─────────────────────────────────────────────────────────────────────────────
   const CSS = `
     /* ── Panel shell ── */
@@ -52,8 +58,8 @@
     /* ── Sweep banner ── */
     #tdbo-signals-panel .sg-banner {
       display: flex; align-items: center; justify-content: space-between;
-      flex-wrap: wrap; gap: 8px;
-      padding: 9px 14px;
+      flex-wrap: wrap; gap: 6px;
+      padding: 8px 14px;
       background: var(--sg-panel);
       border-bottom: 1px solid var(--sg-border);
       backdrop-filter: blur(18px);
@@ -77,17 +83,25 @@
       cursor: pointer; user-select: all;
       border-bottom: 1px dashed rgba(100,240,200,.3);
     }
-    #tdbo-signals-panel .sg-clock { color: var(--sg-acc2); }
+    #tdbo-signals-panel .sg-clock { color: var(--sg-acc2); font-family: var(--sg-mono); font-size: 11px; }
 
-    /* ── Top-right controls ── */
+    /* ── Top-right controls — TWO-ROW layout ── */
     #tdbo-signals-panel .sg-controls {
-      display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    }
+    /* Row 1: governance badges + 512/CVS Live label */
+    #tdbo-signals-panel .sg-controls-row1 {
+      display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+    }
+    /* Row 2: clock + TG + DC + theme */
+    #tdbo-signals-panel .sg-controls-row2 {
+      display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
     }
 
     /* Governance status group (GW · H- · CVS) */
     #tdbo-signals-panel .sg-gov-group {
       display: flex; align-items: center; gap: 5px;
-      padding: 4px 10px;
+      padding: 3px 9px;
       border: 1px solid var(--sg-border); background: var(--sg-glass);
       backdrop-filter: blur(12px);
     }
@@ -106,15 +120,22 @@
     #tdbo-signals-panel .sg-badge.hmac .sg-bdot { background:var(--sg-acc2); box-shadow:0 0 5px var(--sg-acc2); }
     #tdbo-signals-panel .sg-badge.cvs  { color: #b388ff; }
     #tdbo-signals-panel .sg-badge.cvs  .sg-bdot { background:#b388ff; box-shadow:0 0 5px #b388ff; }
-    /* dim state when not yet active */
     #tdbo-signals-panel .sg-badge.off  { opacity: .35; }
     #tdbo-signals-panel .sg-badge.off  .sg-bdot { animation: none; }
     #tdbo-signals-panel .sg-sep { color: var(--sg-dim); opacity: .5; }
 
+    /* 512/CVS Live label (sits next to gov-group in row 1) */
+    #tdbo-signals-panel .sg-cvs-live {
+      font-family: var(--sg-mono); font-size: 9px; font-weight: 600;
+      letter-spacing: 0.1em; color: #b388ff;
+      padding: 3px 8px; border: 1px solid rgba(179,136,255,.25);
+      background: rgba(179,136,255,.06); white-space: nowrap;
+    }
+
     /* TG / DC pills */
     #tdbo-signals-panel .sg-pill {
       font-family: var(--sg-mono); font-size: 10px; font-weight: 700;
-      letter-spacing: 0.1em; padding: 4px 10px; border: 1px solid;
+      letter-spacing: 0.1em; padding: 3px 9px; border: 1px solid;
       cursor: pointer; transition: all 0.18s; user-select: none; background: transparent;
     }
     #tdbo-signals-panel .sg-tg {
@@ -132,9 +153,9 @@
 
     /* Theme button */
     #tdbo-signals-panel .sg-theme {
-      padding: 4px 8px; border: 1px solid var(--sg-border);
+      padding: 3px 7px; border: 1px solid var(--sg-border);
       background: var(--sg-glass); color: var(--sg-dim);
-      font-size: 14px; cursor: pointer; line-height: 1; transition: all .18s;
+      font-size: 13px; cursor: pointer; line-height: 1; transition: all .18s;
     }
     #tdbo-signals-panel .sg-theme:hover { color: var(--sg-text); border-color: var(--sg-bright); }
 
@@ -199,27 +220,41 @@
     }
     #tdbo-signals-panel .sg-conf-fill {
       height:100%; border-radius:2px;
-      background:linear-gradient(90deg,rgba(68,204,255,.5),var(--sg-accent));
+      background:linear-gradient(90deg,rgba(100,240,200,.4),var(--sg-accent));
       transition:width .4s ease;
     }
     #tdbo-signals-panel .sg-conf-pct {
-      font-family:var(--sg-mono); font-size:9px; color:var(--sg-acc2);
+      font-family:var(--sg-mono); font-size:9px; color:var(--sg-accent);
       white-space:nowrap;
     }
 
-    /* EO chip */
+    /* ── EO chip ──
+       FIX (Session 7b): ALL chips use --sg-accent (green).
+       The previous .sweep-level override set color:var(--sg-acc2) which rendered
+       blue and was hard to read. Both idea-level and sweep-level chips now share
+       the same green style; sweep-level chips get a slightly lighter background
+       tint to remain visually distinguishable without changing the text colour.
+    */
     #tdbo-signals-panel .sg-eo {
       font-family:var(--sg-mono); font-size:9px; font-weight:600;
       letter-spacing:0.06em; padding:2px 7px;
-      border:1px solid rgba(100,240,200,.22); background:rgba(100,240,200,.06);
-      color:var(--sg-accent);
+      border:1px solid rgba(100,240,200,.30); background:rgba(100,240,200,.08);
+      color: var(--sg-accent);
       cursor:pointer; user-select:all; white-space:nowrap; flex-shrink:0;
       align-self:flex-start; margin-top:1px;
       position:relative; transition:background .15s;
     }
-    #tdbo-signals-panel .sg-eo:hover { background:rgba(100,240,200,.15); }
-    #tdbo-signals-panel .sg-eo.sweep-level { color:var(--sg-acc2); border-color:rgba(68,204,255,.22); background:rgba(68,204,255,.06); }
-    #tdbo-signals-panel .sg-eo.pending     { color:var(--sg-dim);  border-color:var(--sg-border);    background:transparent; cursor:default; }
+    #tdbo-signals-panel .sg-eo:hover { background:rgba(100,240,200,.18); }
+    /* sweep-level: same green text, slightly distinct border shade */
+    #tdbo-signals-panel .sg-eo.sweep-level {
+      color: var(--sg-accent);
+      border-color: rgba(100,240,200,.20);
+      background: rgba(100,240,200,.05);
+    }
+    #tdbo-signals-panel .sg-eo.pending {
+      color:var(--sg-dim); border-color:var(--sg-border);
+      background:transparent; cursor:default;
+    }
     /* CSS tooltip on hover */
     #tdbo-signals-panel .sg-eo[data-fid]:hover::after {
       content: attr(data-fid);
@@ -269,7 +304,6 @@
   let darkOn  = localStorage.getItem('crucix_sg_theme') !== 'light';
   let clockTmr = null;
 
-  // v3 crypto state — identical fields so applyTdboStatus() works unchanged
   const cryptoState = {
     gateway: 'off', stateHash: 'off', cvs512: 'off', anchor: 'off',
     lastHash: null, lastTx: null, lastEoId: null,
@@ -316,7 +350,6 @@
     return n <= 1 ? Math.round(n * 100) : Math.round(n);
   }
 
-  // Merkle root display string (uses stateHash if available, else derives from sweepId)
   function merkleDisplay(stateHash, sweepId) {
     const src = stateHash || (sweepId ? (sweepId + sweepId).replace(/[^0-9a-f]/gi,'').padEnd(32,'0') : null);
     if (!src) return { short: '—', full: '' };
@@ -325,7 +358,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // EO chip (preserves v3 priority logic)
+  // EO chip — always green (Session 7b fix)
   // ─────────────────────────────────────────────────────────────────────────────
   function eoChipHTML(idea) {
     const ideaEo  = idea.eoId || idea.eo_id || idea.evidenceId || idea.evidence_id || null;
@@ -383,7 +416,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Governance badge group HTML (reflects cryptoState)
+  // Governance badge group HTML
   // ─────────────────────────────────────────────────────────────────────────────
   function govGroupHTML() {
     const gw  = cryptoState.gateway   !== 'off';
@@ -398,13 +431,33 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Controls HTML — two-row layout (Session 7b fix for overlap)
+  //   Row 1: gov-group badges  +  512/CVS Live label
+  //   Row 2: clock  ·  TG  ·  DC  ·  theme toggle
+  // ─────────────────────────────────────────────────────────────────────────────
+  function controlsHTML() {
+    return `
+      <div class="sg-controls">
+        <div class="sg-controls-row1">
+          <div class="sg-gov-group" id="sg-gov-group">${govGroupHTML()}</div>
+          <span class="sg-cvs-live">512/CVS Live</span>
+        </div>
+        <div class="sg-controls-row2">
+          <span class="sg-clock" id="sg-live-clock">--:--:--</span>
+          <button class="sg-pill sg-tg${tgOn?'':' sg-off'}" id="sg-btn-tg" title="Toggle Telegram dispatch">● TG</button>
+          <button class="sg-pill sg-dc${dcOn?'':' sg-off'}" id="sg-btn-dc" title="Toggle Discord dispatch">● DC</button>
+          <button class="sg-theme" id="sg-btn-theme" title="Toggle light/dark">${darkOn ? '☀️' : '🌙'}</button>
+        </div>
+      </div>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Full panel render
   // ─────────────────────────────────────────────────────────────────────────────
   function renderPanel(data) {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
 
-    // Sync theme class
     panel.classList.toggle('sg-light', !darkOn);
 
     const tdbo    = data?.tdbo   || {};
@@ -412,18 +465,15 @@
     const sweepId = tdbo.sweepId || data?.meta?.sweepId || '';
     const ts      = data?.meta?.timestamp ? new Date(data.meta.timestamp) : new Date();
 
-    const admitted = tdbo.ideasAdmitted ?? stats.admitted;
-    const refused  = tdbo.ideasRefused  ?? stats.refused;
+    const admitted  = tdbo.ideasAdmitted ?? stats.admitted;
+    const refused   = tdbo.ideasRefused  ?? stats.refused;
     const evaluated = ideas.length || (admitted + refused);
 
-    // Refresh global stats
     if (tdbo.ideasAdmitted !== undefined) stats.admitted = tdbo.ideasAdmitted;
     if (tdbo.ideasRefused  !== undefined) stats.refused  = tdbo.ideasRefused;
 
-    // Update cryptoState from incoming tdbo block
     applyTdboStatus(tdbo);
 
-    // Merge ideas into local signal list (prepend new ones)
     for (const idea of [...ideas].reverse()) {
       if (idea.title || idea.content) {
         idea._ts = idea._ts || ts.getTime();
@@ -434,22 +484,19 @@
       }
     }
 
-    // Cards HTML
     const cardsHTML = signals.length
       ? signals.map(cardHTML).join('')
       : `<div class="sg-empty">⏳ AWAITING FIRST GOVERNED SWEEP</div>`;
 
-    // Merkle
     const { short: mkShort, full: mkFull } = merkleDisplay(tdbo.stateHash || cryptoState.lastHash, sweepId);
     const anchorTs = ts.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
                    + ' · ' + ts.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
-    const anchorTx = cryptoState.lastTx;
+    const anchorTx  = cryptoState.lastTx;
     const anchorUrl = anchorTx && String(anchorTx).startsWith('0x')
       ? `https://sepolia.arbiscan.io/tx/${anchorTx}`
       : 'https://sepolia.arbiscan.io/';
 
     panel.innerHTML = `
-      <!-- ── Sweep banner ── -->
       <div class="sg-banner">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span class="sg-brand">TDBO GOVERNED SIGNALS</span>
@@ -462,25 +509,9 @@
             &nbsp;·&nbsp;${evaluated} signals evaluated · ${admitted} admitted, ${refused} refused
           </span>
         </div>
-        <div class="sg-controls">
-          <!-- GW · H- · CVS -->
-          <div class="sg-gov-group" id="sg-gov-group">
-            ${govGroupHTML()}
-          </div>
-          <!-- Live clock -->
-          <span class="sg-clock" style="font-family:var(--sg-mono);font-size:11px" id="sg-live-clock">--:--:--</span>
-          <!-- TG / DC -->
-          <button class="sg-pill sg-tg${tgOn?'':' sg-off'}" id="sg-btn-tg" title="Toggle Telegram dispatch">● TG</button>
-          <button class="sg-pill sg-dc${dcOn?'':' sg-off'}" id="sg-btn-dc" title="Toggle Discord dispatch">● DC</button>
-          <!-- Theme -->
-          <button class="sg-theme" id="sg-btn-theme" title="Toggle light/dark">${darkOn ? '☀️' : '🌙'}</button>
-        </div>
+        ${controlsHTML()}
       </div>
-
-      <!-- ── Signal cards ── -->
       <div class="sg-list">${cardsHTML}</div>
-
-      <!-- ── Merkle footer ── -->
       <div class="sg-footer">
         <div class="sg-merkle">
           <span style="opacity:.55">⊙ Merkle root:</span>
@@ -496,29 +527,31 @@
       </div>
     `;
 
-    // Wire buttons
-    document.getElementById('sg-btn-tg').addEventListener('click', function () {
-      tgOn = !tgOn;
-      localStorage.setItem('crucix_sg_tg', String(tgOn));
-      this.classList.toggle('sg-off', !tgOn);
-    });
-    document.getElementById('sg-btn-dc').addEventListener('click', function () {
-      dcOn = !dcOn;
-      localStorage.setItem('crucix_sg_dc', String(dcOn));
-      this.classList.toggle('sg-off', !dcOn);
-    });
-    document.getElementById('sg-btn-theme').addEventListener('click', function () {
-      darkOn = !darkOn;
-      localStorage.setItem('crucix_sg_theme', darkOn ? 'dark' : 'light');
-      panel.classList.toggle('sg-light', !darkOn);
-      this.textContent = darkOn ? '☀️' : '🌙';
-    });
-
+    _wireButtons(panel);
     startClock();
   }
 
+  function _wireButtons(panel) {
+    const btnTg    = document.getElementById('sg-btn-tg');
+    const btnDc    = document.getElementById('sg-btn-dc');
+    const btnTheme = document.getElementById('sg-btn-theme');
+    if (btnTg) btnTg.addEventListener('click', function () {
+      tgOn = !tgOn; localStorage.setItem('crucix_sg_tg', String(tgOn));
+      this.classList.toggle('sg-off', !tgOn);
+    });
+    if (btnDc) btnDc.addEventListener('click', function () {
+      dcOn = !dcOn; localStorage.setItem('crucix_sg_dc', String(dcOn));
+      this.classList.toggle('sg-off', !dcOn);
+    });
+    if (btnTheme) btnTheme.addEventListener('click', function () {
+      darkOn = !darkOn; localStorage.setItem('crucix_sg_theme', darkOn ? 'dark' : 'light');
+      panel.classList.toggle('sg-light', !darkOn);
+      this.textContent = darkOn ? '☀️' : '🌙';
+    });
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
-  // applyTdboStatus — v3 logic, unchanged field mapping
+  // applyTdboStatus — v3 field mapping unchanged
   // ─────────────────────────────────────────────────────────────────────────────
   function applyTdboStatus(t) {
     if (!t) return;
@@ -551,7 +584,6 @@
       changed = true;
     }
 
-    // Refresh badges in-place without full re-render
     if (changed) {
       const gg = document.getElementById('sg-gov-group');
       if (gg) gg.innerHTML = govGroupHTML();
@@ -559,7 +591,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // SSE (v3 message handling, unchanged)
+  // SSE
   // ─────────────────────────────────────────────────────────────────────────────
   function connectSSE() {
     let es;
@@ -606,24 +638,17 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Mount panel (idempotent — D-07 guard)
+  // Mount panel (idempotent)
   // ─────────────────────────────────────────────────────────────────────────────
   function mountPanel() {
     if (document.getElementById(PANEL_ID)) return;
     injectStyle();
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
-    // Render empty state immediately so the panel appears before data loads
     panel.innerHTML = `
       <div class="sg-banner">
         <span class="sg-brand">TDBO GOVERNED SIGNALS</span>
-        <div class="sg-controls">
-          <div class="sg-gov-group" id="sg-gov-group">${govGroupHTML()}</div>
-          <span class="sg-clock" id="sg-live-clock" style="font-family:var(--sg-mono);font-size:11px">--:--:--</span>
-          <button class="sg-pill sg-tg${tgOn?'':' sg-off'}" id="sg-btn-tg">● TG</button>
-          <button class="sg-pill sg-dc${dcOn?'':' sg-off'}" id="sg-btn-dc">● DC</button>
-          <button class="sg-theme" id="sg-btn-theme">${darkOn?'☀️':'🌙'}</button>
-        </div>
+        ${controlsHTML()}
       </div>
       <div class="sg-list"><div class="sg-empty">⏳ AWAITING FIRST GOVERNED SWEEP</div></div>
       <div class="sg-footer">
@@ -636,41 +661,24 @@
     else document.body.prepend(panel);
 
     startClock();
-
-    // Wire initial pill/theme buttons
-    document.getElementById('sg-btn-tg').addEventListener('click', function () {
-      tgOn = !tgOn; localStorage.setItem('crucix_sg_tg', String(tgOn));
-      this.classList.toggle('sg-off', !tgOn);
-    });
-    document.getElementById('sg-btn-dc').addEventListener('click', function () {
-      dcOn = !dcOn; localStorage.setItem('crucix_sg_dc', String(dcOn));
-      this.classList.toggle('sg-off', !dcOn);
-    });
-    document.getElementById('sg-btn-theme').addEventListener('click', function () {
-      darkOn = !darkOn; localStorage.setItem('crucix_sg_theme', darkOn ? 'dark' : 'light');
-      panel.classList.toggle('sg-light', !darkOn);
-      this.textContent = darkOn ? '☀️' : '🌙';
-    });
+    _wireButtons(panel);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Boot: hydrate from inline data → /api/data → /api/tdbo/status → SSE
+  // Boot: inline data → /api/data → /api/tdbo/status poll → SSE
   // ─────────────────────────────────────────────────────────────────────────────
   function boot() {
     mountPanel();
 
-    // 0. Inline __CRUCIX_DATA__ (server-injected)
     if (window.__CRUCIX_DATA__) {
       renderPanel(window.__CRUCIX_DATA__);
     }
 
-    // 1. /api/data (D-06 fix: prefetchHistorical)
     fetch('/api/data')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) renderPanel(d); })
       .catch(() => {});
 
-    // 2. /api/tdbo/status poll for crypto badge
     function pollStatus() {
       fetch('/api/tdbo/status')
         .then(r => r.ok ? r.json() : null)
@@ -684,7 +692,6 @@
     pollStatus();
     setInterval(pollStatus, 30000);
 
-    // 3. SSE live stream
     connectSSE();
   }
 
