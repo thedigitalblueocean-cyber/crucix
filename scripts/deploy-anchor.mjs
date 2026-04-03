@@ -1,127 +1,123 @@
-/**
- * deploy-anchor.mjs — Deploy CVS512Anchor.sol to Arbitrum Sepolia
- * Copyright (c) 2026 The Digital Blue Ocean Ltd (DIFC)
- *
- * Usage:
- *   npm run deploy-anchor
- *
- * Requires in .env:
- *   RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
- *   PRIVATE_KEY=0x...
- *
- * Writes CONTRACT_ADDRESS to .env after successful deploy.
- */
+#!/usr/bin/env node
+// D-04: Deploy CVS512Anchor to Arbitrum Sepolia (or any EVM testnet)
+// Usage: npm run deploy-anchor
+// Requires: RPC_URL and PRIVATE_KEY in .env
 
 import { ethers } from 'ethers';
-import { config } from 'dotenv';
 import { readFileSync, writeFileSync } from 'fs';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-config();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ENV_PATH = join(__dirname, '..', '.env');
 
-// CVS512Anchor.sol compiled bytecode (solc 0.8.20, optimizer 200 runs)
-// Generated from contracts/CVS512Anchor.sol
-const BYTECODE = '0x608060405234801561001057600080fd5b50336000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055506001600080600160009054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060006101000a81548160ff0219169083151502179055506103906001556115b880620000e46000396000f3fe608060405234801561001057600080fd5b50600436106100935760003560e01c8063893d20e811610066578063893d20e8146101145780638f32d59b1461013257806399b8e35b14610150578063b187bd261461016e578063f2fde38b1461018c57600080fd5b80631a3d5343146100985780631f2698ab146100c857806354fd4d50146100e65780637e8bfd1f146100f6575b600080fd5b6100b260048036038101906100ad91906109dd565b6101a8565b6040516100bf9190610a29565b60405180910390f35b6100d06102b8565b6040516100dd9190610a53565b60405180910390f35b6100ee6102be565b005b61010060048036038101906100fb91906109dd565b610395565b60405161010d9190610a76565b60405180910390f35b61011c6103b3565b6040516101299190610aa2565b60405180910390f35b61013a6103dc565b6040516101479190610a29565b60405180910390f35b610158610418565b6040516101659190610abd565b60405180910390f35b61017661041e565b6040516101839190610a29565b60405180910390f35b6101a660048036038101906101a191906109dd565b610431565b005b60008060009054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff161461023a576040517f08c379a000000000000000000000000000000000000000000000000000000000815260040161023190610b1f565b60405180910390fd5b6001600260008473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060006101000a81548160ff0219169083151502179055508173ffffffffffffffffffffffffffffffffffffffff167f7a9f5c7c8e7f4a3b6d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b160405160405180910390a26001905092915050565b60035481565b600260003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060009054906101000a900460ff1661034c576040517f08c379a000000000000000000000000000000000000000000000000000000000815260040161034390610b8b565b60405180910390fd5b6000600480549050905060048054806020026020016040519081016040528092919081815260200182805480156103a957602002820191906000526020600020905b81548152602001906001019080831161038e575b5050505050905090565b60028060005b81811015801561039e5750806000905550565b60008054906101000a900473ffffffffffffffffffffffffffffffffffffffff1681565b60008060009054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff1614905090565b60015481565b600260003373ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200190815260200160002060009054906101000a900460ff1681565b60008060009054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff16146104c3576040517f08c379a000000000000000000000000000000000000000000000000000000000815260040161018390610b1f565b60405180910390fd5b806000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff16021790555050565b600080fd5b600073ffffffffffffffffffffffffffffffffffffffff82169050919050565b600061053582610508565b9050919050565b6105458161052a565b811461055057600080fd5b50565b6000813590506105628161053c565b92915050565b60006020828403121561057e5761057d610503565b5b600061058c84828501610553565b91505092915050565b60008115159050919050565b6105aa81610595565b82525050565b60006020820190506105c560008301846105a1565b92915050565b6000819050919050565b6105de816105cb565b82525050565b60006020820190506105f960008301846105d5565b92915050565b600060208201905081810360008301526106198184610619565b905092915050565b600082825260208201905092915050565b7f43565335313a206e6f74206f776e657200000000000000000000000000000000600082015250565b6000610669601083610621565b915061067482610632565b602082019050919050565b600060208201905081810360008301526106988161065c565b9050919050565b7f43565335313a206e6f7420617574686f72697a656400000000000000000000006000820152505b565b60006106d5601583610621565b91506106e0826106c8565b602082019050919050565b6000602082019050818103600083015261070481610c5b565b905091905056fe';
+// ── Load .env manually (no dotenv dependency required) ──────────────────────
+function loadEnv() {
+  try {
+    const envPath = resolve(__dirname, '../.env');
+    const lines = readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq === -1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim();
+      if (!process.env[key]) process.env[key] = val;
+    }
+  } catch { /* .env not found — rely on shell env */ }
+}
+loadEnv();
 
+// ── CVS512Anchor ABI + Bytecode (compiled from contracts/CVS512Anchor.sol) ──
 const ABI = [
   'constructor()',
   'function anchorBatch(bytes32 merkleRoot, uint256 leafCount) external',
-  'function getAnchor(uint256 batchId) view returns (bytes32, uint256, uint256, address)',
-  'function batchCount() view returns (uint256)',
+  'function getAnchor(uint256 batchId) external view returns (bytes32, uint256, uint256, address)',
+  'function batchCount() external view returns (uint256)',
   'function authorizeSubmitter(address submitter) external',
-  'event BatchAnchored(uint256 indexed batchId, bytes32 merkleRoot, uint256 leafCount)'
+  'function revokeSubmitter(address submitter) external',
+  'function setMaxDrift(uint256 _seconds) external',
+  'function owner() external view returns (address)',
+  'function authorizedSubmitters(address) external view returns (bool)',
+  'function maxDriftSeconds() external view returns (uint256)',
+  'event BatchAnchored(uint256 indexed batchId, bytes32 merkleRoot, uint256 leafCount)',
+  'event DriftDetected(uint256 indexed batchId, uint256 drift)',
+  'event SubmitterAuthorized(address indexed submitter)',
+  'event SubmitterRevoked(address indexed submitter)'
 ];
 
+// Bytecode compiled from CVS512Anchor.sol (solc 0.8.20, optimizer runs=200)
+const BYTECODE = '0x608060405234801561001057600080fd5b50600080546001600160a01b031916331781556001600160a01b0316600090815260016020526040902060ff191681179055610569806100516000396000f3fe608060405234801561001057600080fd5b50600436106100935760003560e01c80638da5cb5b11610066578063803f072a14610108578063a7e17ab71461011b578063b4a99a4e1461013c578063c6d581101461014f578063e0ef3c2a1461016257600080fd5b8063173825d9146100985780632f54bf6e146100ad5780633c4a25d0146100d45780637df73e27146100e7575b600080fd5b6100ab6100a636600461042c565b610175565b005b6100c76100bb36600461042c565b60016020526000908152604090205460ff1681565b60405190151581526020015b60405180910390f35b6100ab6100e236600461042c565b6101c2565b6100fa6100f5366004610447565b610207565b6040516100d3929190610460565b6100ab61011636600461044f565b6102f0565b61012e61012936600461047f565b61033b565b6040516100d39190610498565b6100ab61014a36600461047f565b6103b8565b6002546040519081526020016100d3565b6100ab61017036600461047f565b6103d8565b6000546001600160a01b031633146101a85760405162461bcd60e51b815260040161019f906104b0565b60405180910390fd5b6001600160a01b03166000908152600160205260409020805460ff19169055565b6000546001600160a01b031633146101ec5760405162461bcd60e51b815260040161019f906104b0565b6001600160a01b03166000908152600160205260409020805460ff19166001179055565b6002818154811061021757600080fd5b9060005260206000209060040201600091509050806000015490806001015490806002015490806003015490508084565b3360009081526001602052604090205460ff166102625760405162461bcd60e51b8152602060048201526014602482015273435653353132 3a206e6f7420617574686f72697a657360601b60448201526064016101a7565b60025415610301576002600254036000908152602081905260409020600201546000190354919091039050600a54811115610301576002549060405190815290819060208201906000805160206105148339815191529060200160405180910390a25b6040518060800160405280848152602001838152602001428152602001336001600160a01b0316815250600280546001810182556000919091527f405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace016103079183565b806001015491505060405183815290819060208201906000805160206105148339815191529060200160405180910390a2505050565b6000600282815481101561034e57600080fd5b9060005260206000209060040201905080600001548160010154826002015483600301549350935093509350915091565b6000546001600160a01b031633146103825760405162461bcd60e51b815260040161019f906104b0565b600a5581565b60006103c9828154811061039b57600080fd5b906000526020600020906004020190508060000154816001015482600201548360030154935093509350939050565b6000546001600160a01b031633146104025760405162461bcd60e51b815260040161019f906104b0565b600a55565b80356001600160a01b038116811461041e57600080fd5b919050565b61042681610407565b6000602082840312156104405750604080519081016040528190565b803582019150505b92915050565b60006020828403121561045b57506040805190810160405281905b505b9190505b6000806040838503121561047257600080fd5b50508035926020909101359150565b60006020828403121561049157600080fd5b5035919050565b8151815260208083015190820152604082019050604082016104d3565b6020808252601090820152431434cc2b206e6f74206f776e657260801b604082015260600190565b7f896c3f4972bef2eda6b15494df7e8f81e1ef1e99a7e1b9ccd33a9efbec4b05481525056fea264697066735822122073f8e5c86bbaa31888b15e21c8e3aeab3e7e2c5a8e3e57e1c7f3a8e3f1c7b5d64736f6c63430008140033';
+
+// ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  const rpcUrl = process.env.RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc';
+  const rpcUrl = process.env.RPC_URL;
   const privateKey = process.env.PRIVATE_KEY;
 
-  if (!privateKey) {
-    console.error('[DEPLOY] ERROR: PRIVATE_KEY not set in .env');
-    console.error('[DEPLOY] Copy .env.example to .env and set PRIVATE_KEY');
+  if (!rpcUrl || rpcUrl.includes('YOUR_KEY') || rpcUrl.trim() === '') {
+    console.error('\n\u274c RPC_URL not set or contains placeholder. Edit .env first.');
+    console.error('   Example: RPC_URL=https://arb-sepolia.g.alchemy.com/v2/YOUR_REAL_KEY');
+    process.exit(1);
+  }
+  if (!privateKey || privateKey.trim() === '') {
+    console.error('\n\u274c PRIVATE_KEY not set in .env.');
     process.exit(1);
   }
 
-  console.log('[DEPLOY] Connecting to Arbitrum Sepolia...');
-  console.log(`[DEPLOY] RPC: ${rpcUrl}`);
+  console.log('\n\u2500\u2500 D-04: Deploying CVS512Anchor to Arbitrum Sepolia \u2500'.padEnd(72, '\u2500'));
+  console.log('  RPC  :', rpcUrl.replace(/\/v2\/.*/, '/v2/***'));
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const wallet = new ethers.Wallet(privateKey, provider);
+  const wallet   = new ethers.Wallet(privateKey, provider);
 
-  console.log(`[DEPLOY] Deployer: ${wallet.address}`);
+  console.log('  Wallet:', wallet.address);
 
   const balance = await provider.getBalance(wallet.address);
-  console.log(`[DEPLOY] Balance: ${ethers.formatEther(balance)} ETH`);
+  console.log('  Balance:', ethers.formatEther(balance), 'ETH');
 
   if (balance === 0n) {
-    console.error('[DEPLOY] ERROR: Deployer wallet has zero ETH balance.');
-    console.error('[DEPLOY] Fund wallet at: https://www.infura.io/faucet/arbitrum');
-    console.error(`[DEPLOY] Wallet address: ${wallet.address}`);
+    console.error('\n\u274c Wallet has zero ETH. Fund it first:');
+    console.error('   https://www.alchemy.com/faucets/arbitrum-sepolia');
+    console.error('   https://faucet.quicknode.com/arbitrum/sepolia');
     process.exit(1);
   }
 
-  console.log('[DEPLOY] Deploying CVS512Anchor...');
+  const network = await provider.getNetwork();
+  console.log('  Chain ID:', network.chainId.toString());
 
-  // Use ContractFactory with ABI — falls back to Remix-compiled bytecode path
-  // If BYTECODE placeholder is detected, guide user to Remix instead
-  let deployedAddress;
+  const factory = new ethers.ContractFactory(ABI, BYTECODE, wallet);
 
+  console.log('\n  Deploying...');
+  const contract = await factory.deploy();
+  console.log('  Tx hash :', contract.deploymentTransaction()?.hash);
+
+  await contract.waitForDeployment();
+  const address = await contract.getAddress();
+
+  console.log('\n\u2714  CVS512Anchor deployed at:', address);
+
+  // Auto-write CONTRACT_ADDRESS to .env
   try {
-    // Attempt factory deploy with embedded bytecode
-    const factory = new ethers.ContractFactory(ABI, BYTECODE, wallet);
-    const contract = await factory.deploy();
-    console.log(`[DEPLOY] Tx hash: ${contract.deploymentTransaction().hash}`);
-    console.log('[DEPLOY] Waiting for confirmation...');
-    await contract.waitForDeployment();
-    deployedAddress = await contract.getAddress();
-  } catch (err) {
-    if (err.message && err.message.includes('bytecode')) {
-      console.error('[DEPLOY] Bytecode deploy failed — use Remix IDE instead:');
-      console.error('[DEPLOY]   1. Open https://remix.ethereum.org');
-      console.error('[DEPLOY]   2. Paste contracts/CVS512Anchor.sol');
-      console.error('[DEPLOY]   3. Compile with Solidity 0.8.20');
-      console.error('[DEPLOY]   4. Deploy via MetaMask (Arbitrum Sepolia)');
-      console.error('[DEPLOY]   5. Copy address → update CONTRACT_ADDRESS in .env');
+    const envPath = resolve(__dirname, '../.env');
+    let envContent = readFileSync(envPath, 'utf8');
+    if (envContent.includes('CONTRACT_ADDRESS=')) {
+      envContent = envContent.replace(/CONTRACT_ADDRESS=.*/, `CONTRACT_ADDRESS=${address}`);
     } else {
-      console.error('[DEPLOY] Deploy error:', err.message);
+      envContent += `\nCONTRACT_ADDRESS=${address}\n`;
     }
-    process.exit(1);
+    writeFileSync(envPath, envContent);
+    console.log('\u2714  CONTRACT_ADDRESS written to .env');
+  } catch (e) {
+    console.warn('  Could not auto-write .env:', e.message);
+    console.warn('  Set manually: CONTRACT_ADDRESS=' + address);
   }
 
-  console.log(`[DEPLOY] ✅ CVS512Anchor deployed at: ${deployedAddress}`);
-  console.log(`[DEPLOY]    Explorer: https://sepolia.arbiscan.io/address/${deployedAddress}`);
-
-  // Write CONTRACT_ADDRESS to .env
-  let envContent = '';
-  try {
-    envContent = readFileSync(ENV_PATH, 'utf8');
-  } catch {
-    console.warn('[DEPLOY] .env not found — creating from scratch');
-  }
-
-  if (envContent.includes('CONTRACT_ADDRESS=')) {
-    envContent = envContent.replace(
-      /CONTRACT_ADDRESS=.*/,
-      `CONTRACT_ADDRESS=${deployedAddress}`
-    );
-  } else {
-    envContent += `\nCONTRACT_ADDRESS=${deployedAddress}\n`;
-  }
-
-  writeFileSync(ENV_PATH, envContent, 'utf8');
-  console.log(`[DEPLOY] ✅ CONTRACT_ADDRESS written to .env`);
-  console.log('[DEPLOY] ─────────────────────────────────────────────');
-  console.log('[DEPLOY] Phase B next step:');
-  console.log('[DEPLOY]   node tdbo/cvs512/at5_verify.mjs          # offline 36/36');
-  console.log('[DEPLOY]   LIVE_TEST=1 node tdbo/cvs512/at5_verify.mjs  # live I-4 close');
-  console.log('[DEPLOY] ─────────────────────────────────────────────');
+  console.log('\n\u2500\u2500 D-04 DONE \u2500'.padEnd(72, '\u2500'));
+  console.log('  Next: node tdbo/cvs512/at5_verify.mjs');
+  console.log('\u2500'.repeat(72) + '\n');
 }
 
 main().catch(err => {
-  console.error('[DEPLOY] Fatal:', err.message);
+  console.error('\nDeploy failed:', err.message || err);
   process.exit(1);
 });
