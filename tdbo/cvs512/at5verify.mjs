@@ -5,7 +5,7 @@ import { MerkleTree } from 'merkletreejs';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const raw = readFileSync('tdbo/cvs512/data/witnesschain.jsonl', 'utf8').trim();
+const raw = readFileSync('tdbo/data/witnesschain.jsonl', 'utf8').trim();
 const eos = raw.split('\n').map(l => JSON.parse(l));
 const hash = (s) => createHash('sha256').update(s).digest();
 const leaves = eos.map(eo => hash(JSON.stringify(eo)));
