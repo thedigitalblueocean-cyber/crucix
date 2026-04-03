@@ -205,7 +205,7 @@ app.get('/', (req, res) => {
     let html = readFileSync(htmlPath, 'utf-8');
     const locale = getLocale();
     const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};
-window.__CRUCIX_DATA__ = ${JSON.stringify(currentData).replace(/<\/script>/gi, '<\\/script>')};<\/script>`;
+window.__CRUCIX_DATA__ = ${JSON.stringify(currentData).replace(/<\/script>/gi, '<\\/script>')}<\/script>`;
     html = html.replace('</head>', `${localeScript}\n</head>`);
     res.type('html').send(html);
   }
@@ -427,7 +427,13 @@ async function start() {
   const port = config.port;
 
   // === TDBO 512/CVS + Analyst Init ===
-  await tdbo.init({ anchorInterval: 4 });
+  // Wire anchor RPC, contract address, and private key from config (loaded from .env)
+  await tdbo.init({
+    anchorInterval:  4,
+    anchorRpc:       config.anchor.rpcUrl,
+    anchorContract:  config.anchor.contractAddress,
+    anchorKey:       config.anchor.privateKey,
+  });
 
   analyst.initAnalyst(
     {
