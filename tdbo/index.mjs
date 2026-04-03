@@ -39,6 +39,14 @@ export async function init(config = {}) {
     witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash
   });
 
+  // Connect signer so anchor.submit() sends real on-chain txs (not dry-run)
+  if (config.anchorKey) {
+    await anchor.connectSigner(config.anchorKey);
+    console.log('[TDBO] Anchor signer connected — live anchoring enabled');
+  } else {
+    console.warn('[TDBO] Anchor: no private key provided — dry-run mode');
+  }
+
   const specHash = specBinding.bind();
   const srcCount = Array.isArray(manifest.sources)      ? manifest.sources.length      : 0;
   const llmCount = Array.isArray(manifest.llm_providers) ? manifest.llm_providers.length : 0;
