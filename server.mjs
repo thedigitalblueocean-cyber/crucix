@@ -411,17 +411,26 @@ async function start() {
   const port = config.port;
 
   // === TDBO 512/CVS + Analyst Init ===
-  // Pass all three anchor vars so tdbo.init() can construct Anchor + call connectSigner()
   await tdbo.init({
     anchorInterval:   4,
-    anchorRpc:        config.anchor?.rpcUrl         || process.env.ANCHOR_RPC_URL          || null,
-    anchorContract:   config.anchor?.contractAddress || process.env.ANCHOR_CONTRACT_ADDRESS || null,
-    anchorPrivateKey: config.anchor?.privateKey      || process.env.ANCHOR_PRIVATE_KEY      || null,
+    anchorRpc:        process.env.ANCHOR_RPC_URL,
+    anchorContract:   process.env.ANCHOR_CONTRACT_ADDRESS,
+    anchorPrivateKey: process.env.ANCHOR_PRIVATE_KEY,
   });
+
+  // Register sources and LLM providers into the DOS manifest
+  const resolvedLlmProvider = process.env.LLM_PROVIDER || config.llm?.provider;
+  const sourceIds = Array.isArray(config.sources)
+    ? config.sources.map(s => s.id || s.name || String(s))
+    : (typeof config.sources === 'number' ? Array.from({ length: config.sources }, (_, i) => `source_${i + 1}`) : []);
+  tdbo.registerManifest(
+    sourceIds,
+    resolvedLlmProvider ? [resolvedLlmProvider] : []
+  );
 
   analyst.initAnalyst(
     {
-      provider: process.env.LLM_PROVIDER || config.llm?.provider,
+      provider: resolvedLlmProvider,
       apiKey:   process.env.LLM_API_KEY   || config.llm?.apiKey,
       model:    process.env.LLM_MODEL     || config.llm?.model,
     },

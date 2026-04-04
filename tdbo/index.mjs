@@ -31,20 +31,31 @@ export async function init(config = {}) {
   stateHash     = new StateHash();
   witnessChain  = new WitnessChain();
   merkleBatch   = new MerkleBatch();
-  anchor        = new Anchor(config.anchorRpc, config.anchorContract);
-  verifier      = new Verifier(config.anchorRpc, config.anchorContract);
+  anchor        = new Anchor(
+    config.anchorRpc      || process.env.ANCHOR_RPC_URL,
+    config.anchorContract || process.env.ANCHOR_CONTRACT_ADDRESS
+  );
+  verifier      = new Verifier(
+    config.anchorRpc      || process.env.ANCHOR_RPC_URL,
+    config.anchorContract || process.env.ANCHOR_CONTRACT_ADDRESS
+  );
   economicGate  = new EconomicGate(config.icl);
   riskLedger    = new RiskLedger(config.icl);
   gateway       = new Gateway512({
     witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash
   });
 
-  // Connect signer so anchor exits dry-run (I-4: external verification)
-  if (config.anchorPrivateKey && config.anchorRpc && config.anchorContract) {
-    await anchor.connectSigner(config.anchorPrivateKey);
-    console.log('[TDBO] Anchor signer connected — I-4 status: LIVE');
+  // Connect signer if private key is available
+  const privateKey = config.anchorPrivateKey || process.env.ANCHOR_PRIVATE_KEY;
+  if (privateKey && typeof anchor.connectSigner === 'function') {
+    try {
+      await anchor.connectSigner(privateKey);
+      console.log('[TDBO] Anchor signer connected — I-4 status: LIVE');
+    } catch (err) {
+      console.warn('[TDBO] Anchor signer connect failed (non-fatal):', err.message);
+    }
   } else {
-    console.warn('[TDBO] Anchor: no RPC/contract configured — dry-run mode');
+    console.log('[TDBO] Anchor: no RPC/contract configured — dry-run mode');
   }
 
   const specHash = specBinding.bind();
@@ -53,6 +64,25 @@ export async function init(config = {}) {
   console.log(`[TDBO] Governance layer initialised — spec_hash: ${specHash}`);
   console.log(`[TDBO] DOS manifest loaded: ${srcCount} sources, ${llmCount} LLM providers`);
   return { specHash };
+}
+
+/**
+ * Register sources and LLM providers into the DOS manifest.
+ * Call this after init() once the host application has resolved its config.
+ * @param {string[]} sources        - array of source identifiers
+ * @param {string[]} llmProviders   - array of LLM provider identifiers
+ */
+export function registerManifest(sources = [], llmProviders = []) {
+  if (Array.isArray(sources)) {
+    manifest.sources = sources;
+  }
+  if (Array.isArray(llmProviders)) {
+    manifest.llm_providers = llmProviders;
+    manifest.lia_providers = llmProviders; // keep alias in sync
+  }
+  const srcCount = manifest.sources.length;
+  const llmCount = manifest.llm_providers.length;
+  console.log(`[TDBO] DOS manifest registered: ${srcCount} sources, ${llmCount} LLM providers`);
 }
 
 export function onSweepComplete(sweepData) {
