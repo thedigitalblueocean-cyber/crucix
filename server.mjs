@@ -302,6 +302,11 @@ async function runSweepCycle() {
       alerts: rawData.alerts || [],
     };
 
+    // Update DOS manifest with live source IDs returned from this sweep
+    const liveSourceIds = sweepData.sources.map(s => s.id || s.source_id).filter(Boolean);
+    const resolvedLlmProvider = process.env.LLM_PROVIDER || config.llm?.provider;
+    tdbo.registerManifest(liveSourceIds, resolvedLlmProvider ? [resolvedLlmProvider] : []);
+
     // onSweepComplete returns an EvidenceObject (frozen); extract id as sweep_id
     const sweepEvidence = await Promise.resolve(tdbo.onSweepComplete(sweepData));
     sweepData.sweep_id = sweepEvidence?.id || `sweep_${Date.now()}`;
@@ -418,15 +423,9 @@ async function start() {
     anchorPrivateKey: process.env.ANCHOR_PRIVATE_KEY,
   });
 
-  // Register sources and LLM providers into the DOS manifest
+  // Boot-time manifest registration — LLM provider known at start, sources updated per sweep
   const resolvedLlmProvider = process.env.LLM_PROVIDER || config.llm?.provider;
-  const sourceIds = Array.isArray(config.sources)
-    ? config.sources.map(s => s.id || s.name || String(s))
-    : (typeof config.sources === 'number' ? Array.from({ length: config.sources }, (_, i) => `source_${i + 1}`) : []);
-  tdbo.registerManifest(
-    sourceIds,
-    resolvedLlmProvider ? [resolvedLlmProvider] : []
-  );
+  tdbo.registerManifest([], resolvedLlmProvider ? [resolvedLlmProvider] : []);
 
   analyst.initAnalyst(
     {
