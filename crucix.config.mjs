@@ -8,9 +8,20 @@ export default {
 
   llm: {
     provider: process.env.LLM_PROVIDER || null, // anthropic | openai | gemini | codex | openrouter | minimax | mistral | ollama
-    apiKey: process.env.LLM_API_KEY || null,
+    apiKey: process.env.LLM_API_KEY || null,    // For openai set LLM_PROVIDER=openai and LLM_API_KEY=sk-...
     model: process.env.LLM_MODEL || null,
     baseUrl: process.env.OLLAMA_BASE_URL || null,
+  },
+
+  // CVS-512 On-chain anchor (Arbitrum Sepolia testnet)
+  // Set all three to exit dry-run and flip I-4 to LIVE:
+  //   ANCHOR_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
+  //   ANCHOR_CONTRACT_ADDRESS=0x<deployed CVS512Anchor address>
+  //   ANCHOR_PRIVATE_KEY=0x<funded Arbitrum Sepolia wallet key>
+  anchor: {
+    rpcUrl:          process.env.ANCHOR_RPC_URL          || null,
+    contractAddress: process.env.ANCHOR_CONTRACT_ADDRESS || null,
+    privateKey:      process.env.ANCHOR_PRIVATE_KEY      || null,
   },
 
   telegram: {
@@ -25,14 +36,6 @@ export default {
     channelId: process.env.DISCORD_CHANNEL_ID || null,
     guildId: process.env.DISCORD_GUILD_ID || null, // Server ID (for instant slash command registration)
     webhookUrl: process.env.DISCORD_WEBHOOK_URL || null, // Fallback: webhook-only alerts (no bot needed)
-  },
-
-  // CVS-512 on-chain anchor (Arbitrum Sepolia by default)
-  // Leave ANCHOR_CONTRACT_ADDRESS empty to run in dry-run mode (no real tx submitted).
-  anchor: {
-    contractAddress: process.env.ANCHOR_CONTRACT_ADDRESS || null,
-    rpcUrl: process.env.ANCHOR_RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc',
-    privateKey: process.env.ANCHOR_PRIVATE_KEY || null,
   },
 
   // Delta engine thresholds — override defaults from lib/delta/engine.mjs
