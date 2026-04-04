@@ -39,20 +39,23 @@ export async function init(config = {}) {
     witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash
   });
 
-  // Connect signer so anchor.submit() sends real on-chain txs (not dry-run)
-  if (config.anchorKey) {
-    await anchor.connectSigner(config.anchorKey);
-    console.log('[TDBO] Anchor signer connected — live anchoring enabled');
-  } else {
-    console.warn('[TDBO] Anchor: no private key provided — dry-run mode');
-  }
-
   const specHash = specBinding.bind();
   const srcCount = Array.isArray(manifest.sources)      ? manifest.sources.length      : 0;
   const llmCount = Array.isArray(manifest.llm_providers) ? manifest.llm_providers.length : 0;
   console.log(`[TDBO] Governance layer initialised — spec_hash: ${specHash}`);
   console.log(`[TDBO] DOS manifest loaded: ${srcCount} sources, ${llmCount} LLM providers`);
   return { specHash };
+}
+
+/**
+ * Connect an Ethereum signer to the live anchor.
+ * Call after init() when ANCHOR_PRIVATE_KEY is available.
+ * This flips Invariant I-4 from dry-run to LIVE.
+ */
+export async function connectAnchorSigner(privateKey) {
+  if (!anchor) throw new Error('[TDBO] init() must be called before connectAnchorSigner()');
+  await anchor.connectSigner(privateKey);
+  console.log('[TDBO] Anchor signer connected — I-4 status: LIVE');
 }
 
 export function onSweepComplete(sweepData) {
@@ -63,29 +66,16 @@ export function onSweepComplete(sweepData) {
     });
     witnessChain.append(evidence);
     stateHash.update(sweepData);
-
-    // Add EO to Merkle batch BEFORE checking whether to flush
-    if (merkleBatch) {
-      merkleBatch.add(evidence);
-    }
-
     // Fire-and-forget Merkle anchor — never crash the sweep
     if (merkleBatch && merkleBatch.shouldFlush()) {
       Promise.resolve()
         .then(() => {
-          const batch = merkleBatch.flush();
-          console.log(`[TDBO] Merkle flush — root: ${batch.root}, leaves: ${batch.leafCount}`);
-          return anchor.submit(batch);
-        })
-        .then(submission => {
-          if (submission?.txHash) {
-            console.log(`[TDBO] Anchor submitted — txHash: ${submission.txHash}`);
-          }
+          const root = merkleBatch.flush();
+          return anchor.submit(root);
         })
         .catch(err => console.warn('[TDBO] Anchor submit failed (non-fatal):', err.message));
     }
-
-    console.log(`[TDBO] Sweep EO id: ${evidence.id} | Merkle pending: ${merkleBatch?.pending ?? 0}`);
+    console.log(`[TDBO] Sweep EO id: ${evidence.id}`);
     return evidence;
   } catch (err) {
     console.error('[TDBO] onSweepComplete error (non-fatal):', err.message);
@@ -104,12 +94,6 @@ export function onAlertDispatched(alert) {
       where: 'crucix-runtime',
     });
     witnessChain.append(evidence);
-
-    // Add alert EO to Merkle batch so alert evidence is also anchored
-    if (merkleBatch) {
-      merkleBatch.add(evidence);
-    }
-
     riskLedger.record(alert);
     return evidence;
   } catch (err) {
