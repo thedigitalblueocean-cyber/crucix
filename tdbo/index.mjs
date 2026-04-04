@@ -39,23 +39,20 @@ export async function init(config = {}) {
     witnessChain, merkleBatch, anchor, economicGate, riskLedger, stateHash
   });
 
+  // Connect signer so anchor exits dry-run (I-4: external verification)
+  if (config.anchorPrivateKey && config.anchorRpc && config.anchorContract) {
+    await anchor.connectSigner(config.anchorPrivateKey);
+    console.log('[TDBO] Anchor signer connected — I-4 status: LIVE');
+  } else {
+    console.warn('[TDBO] Anchor: no RPC/contract configured — dry-run mode');
+  }
+
   const specHash = specBinding.bind();
   const srcCount = Array.isArray(manifest.sources)      ? manifest.sources.length      : 0;
   const llmCount = Array.isArray(manifest.llm_providers) ? manifest.llm_providers.length : 0;
   console.log(`[TDBO] Governance layer initialised — spec_hash: ${specHash}`);
   console.log(`[TDBO] DOS manifest loaded: ${srcCount} sources, ${llmCount} LLM providers`);
   return { specHash };
-}
-
-/**
- * Connect an Ethereum signer to the live anchor.
- * Call after init() when ANCHOR_PRIVATE_KEY is available.
- * This flips Invariant I-4 from dry-run to LIVE.
- */
-export async function connectAnchorSigner(privateKey) {
-  if (!anchor) throw new Error('[TDBO] init() must be called before connectAnchorSigner()');
-  await anchor.connectSigner(privateKey);
-  console.log('[TDBO] Anchor signer connected — I-4 status: LIVE');
 }
 
 export function onSweepComplete(sweepData) {

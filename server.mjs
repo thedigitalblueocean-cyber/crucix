@@ -411,29 +411,13 @@ async function start() {
   const port = config.port;
 
   // === TDBO 512/CVS + Analyst Init ===
-  // FIX(session-12): pass anchorRpc + anchorContract so Anchor exits dry-run
-  // Requires in .env: ANCHOR_RPC_URL, ANCHOR_CONTRACT_ADDRESS, ANCHOR_PRIVATE_KEY
-  const anchorRpc      = config.anchor?.rpcUrl          || null;
-  const anchorContract = config.anchor?.contractAddress  || null;
-  const anchorKey      = config.anchor?.privateKey       || null;
-
+  // Pass all three anchor vars so tdbo.init() can construct Anchor + call connectSigner()
   await tdbo.init({
-    anchorInterval:  4,
-    anchorRpc,
-    anchorContract,
+    anchorInterval:   4,
+    anchorRpc:        config.anchor?.rpcUrl         || process.env.ANCHOR_RPC_URL          || null,
+    anchorContract:   config.anchor?.contractAddress || process.env.ANCHOR_CONTRACT_ADDRESS || null,
+    anchorPrivateKey: config.anchor?.privateKey      || process.env.ANCHOR_PRIVATE_KEY      || null,
   });
-
-  // Connect signer so anchorBatch() submits real on-chain txs (skipped if key absent)
-  if (anchorKey && typeof tdbo.connectAnchorSigner === 'function') {
-    try {
-      await tdbo.connectAnchorSigner(anchorKey);
-      console.log('[TDBO] Anchor signer connected — I-4 LIVE');
-    } catch (signerErr) {
-      console.warn('[TDBO] Anchor signer connect failed (non-fatal):', signerErr.message);
-    }
-  } else if (!anchorRpc || !anchorContract) {
-    console.log('[TDBO] Anchor: dry-run (set ANCHOR_RPC_URL + ANCHOR_CONTRACT_ADDRESS + ANCHOR_PRIVATE_KEY in .env to go LIVE)');
-  }
 
   analyst.initAnalyst(
     {
@@ -457,7 +441,6 @@ async function start() {
   \u2551 Health:    http://localhost:${port}/api/health${' '.repeat(4 - String(port).length)}\u2551
   \u2551 Refresh:   Every ${config.refreshIntervalMinutes} min${' '.repeat(20 - String(config.refreshIntervalMinutes).length)}\u2551
   \u2551 LLM:       ${(config.llm.provider || 'disabled').padEnd(31)}\u2551
-  \u2551 Anchor:    ${(anchorContract ? anchorContract.slice(0, 10) + '...' : 'dry-run').padEnd(31)}\u2551
   \u2551 Telegram:  ${config.telegram.botToken ? 'enabled' : 'disabled'}${' '.repeat(config.telegram.botToken ? 24 : 23)}\u2551
   \u2551 Discord:   ${config.discord?.botToken ? 'enabled' : config.discord?.webhookUrl ? 'webhook only' : 'disabled'}${' '.repeat(config.discord?.botToken ? 24 : config.discord?.webhookUrl ? 20 : 23)}\u2551
   \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
