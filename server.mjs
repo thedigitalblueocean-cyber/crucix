@@ -19,7 +19,6 @@ import * as tdbo from './tdbo/index.mjs';
 import * as analyst from './tdbo/analyst/index.mjs';
 import { EvidenceObject } from './tdbo/cvs512/evidence_object.mjs';
 import { WitnessChain } from './tdbo/cvs512/witness_chain.mjs';
-import { recordAdmittedSignals, getSignals } from './tdbo/admitted_signals.mjs';
 
 // ── TDBO hook wrappers (classes must be called via static methods / instances) ──
 const _witnessChainInstance = new WitnessChain();
@@ -204,16 +203,10 @@ app.get('/', (req, res) => {
     const htmlPath = join(ROOT, 'dashboard/public/jarvis.html');
     let html = readFileSync(htmlPath, 'utf-8');
     const locale = getLocale();
-    const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};
-window.__CRUCIX_DATA__ = ${JSON.stringify(currentData).replace(/<\/script>/gi, '<\\/script>')}<\/script>`;
+    const localeScript = `<script>window.__CRUCIX_LOCALE__ = ${JSON.stringify(locale).replace(/<\/script>/gi, '<\\/script>')};<\/script>`;
     html = html.replace('</head>', `${localeScript}\n</head>`);
     res.type('html').send(html);
   }
-});
-
-// NEW: lightweight ready-check endpoint used by loading.html polling
-app.get('/api/ready', (req, res) => {
-  res.json({ ready: currentData !== null });
 });
 
 app.get('/api/data', (req, res) => {
@@ -262,10 +255,6 @@ app.get('/events', (req, res) => {
     'Access-Control-Allow-Origin': '*',
   });
   res.write('data: {"type":"connected"}\n\n');
-  // If data already available, immediately push an update event so loading.html redirects
-  if (currentData) {
-    res.write(`data: {"type":"update"}\n\n`);
-  }
   sseClients.add(res);
   req.on('close', () => sseClients.delete(res));
 });
@@ -354,11 +343,6 @@ async function runSweepCycle() {
       }
     });
 
-    // 3c. Record admitted signals into the tSignals pipeline
-    recordAdmittedSignals(analysisResults?.ideas || []);
-    synthesized.tSignals = getSignals();
-    console.log(`[TDBO] tSignals populated: ${synthesized.tSignals.length} admitted signal(s)`);
-
     synthesized.tdbo = {
       sweepId: sweepData.sweep_id,
       stateHash: sweepStateHash,
@@ -427,13 +411,29 @@ async function start() {
   const port = config.port;
 
   // === TDBO 512/CVS + Analyst Init ===
-  // Wire anchor RPC, contract address, and private key from config (loaded from .env)
+  // FIX(session-12): pass anchorRpc + anchorContract so Anchor exits dry-run
+  // Requires in .env: ANCHOR_RPC_URL, ANCHOR_CONTRACT_ADDRESS, ANCHOR_PRIVATE_KEY
+  const anchorRpc      = config.anchor?.rpcUrl          || null;
+  const anchorContract = config.anchor?.contractAddress  || null;
+  const anchorKey      = config.anchor?.privateKey       || null;
+
   await tdbo.init({
     anchorInterval:  4,
-    anchorRpc:       config.anchor.rpcUrl,
-    anchorContract:  config.anchor.contractAddress,
-    anchorKey:       config.anchor.privateKey,
+    anchorRpc,
+    anchorContract,
   });
+
+  // Connect signer so anchorBatch() submits real on-chain txs (skipped if key absent)
+  if (anchorKey && typeof tdbo.connectAnchorSigner === 'function') {
+    try {
+      await tdbo.connectAnchorSigner(anchorKey);
+      console.log('[TDBO] Anchor signer connected — I-4 LIVE');
+    } catch (signerErr) {
+      console.warn('[TDBO] Anchor signer connect failed (non-fatal):', signerErr.message);
+    }
+  } else if (!anchorRpc || !anchorContract) {
+    console.log('[TDBO] Anchor: dry-run (set ANCHOR_RPC_URL + ANCHOR_CONTRACT_ADDRESS + ANCHOR_PRIVATE_KEY in .env to go LIVE)');
+  }
 
   analyst.initAnalyst(
     {
@@ -457,6 +457,7 @@ async function start() {
   \u2551 Health:    http://localhost:${port}/api/health${' '.repeat(4 - String(port).length)}\u2551
   \u2551 Refresh:   Every ${config.refreshIntervalMinutes} min${' '.repeat(20 - String(config.refreshIntervalMinutes).length)}\u2551
   \u2551 LLM:       ${(config.llm.provider || 'disabled').padEnd(31)}\u2551
+  \u2551 Anchor:    ${(anchorContract ? anchorContract.slice(0, 10) + '...' : 'dry-run').padEnd(31)}\u2551
   \u2551 Telegram:  ${config.telegram.botToken ? 'enabled' : 'disabled'}${' '.repeat(config.telegram.botToken ? 24 : 23)}\u2551
   \u2551 Discord:   ${config.discord?.botToken ? 'enabled' : config.discord?.webhookUrl ? 'webhook only' : 'disabled'}${' '.repeat(config.discord?.botToken ? 24 : config.discord?.webhookUrl ? 20 : 23)}\u2551
   \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
@@ -484,13 +485,11 @@ async function start() {
     });
     try {
       const existing = JSON.parse(readFileSync(join(RUNS_DIR, 'latest.json'), 'utf8'));
-      console.log('[Crucix] Found runs/latest.json — synthesizing for instant load...');
       const data = await synthesize(existing);
       currentData = data;
       console.log('[Crucix] Loaded existing data from runs/latest.json \u2014 dashboard ready instantly');
       broadcast({ type: 'update', data: currentData });
-    } catch (synthErr) {
-      console.error('[Crucix] Could not load runs/latest.json:', synthErr.message);
+    } catch {
       console.log('[Crucix] No existing data found \u2014 first sweep required');
     }
     console.log('[Crucix] Running initial sweep...');
